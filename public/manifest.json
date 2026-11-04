@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "PromptFlow",
+  "version": "1.0.0",
+  "description": "Prepare and manage sequential AI prompts from your project files.",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "promptflow@samworldtechnologies.com",
+      "strict_min_version": "128.0"
+    }
+  },
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "nativeMessaging"
+  ],
+
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+
+  "sidebar_action": {
+    "default_title": "PromptFlow",
+    "default_panel": "index.html"
+  },
+
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
