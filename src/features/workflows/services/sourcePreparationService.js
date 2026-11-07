@@ -5,6 +5,7 @@ export const SOURCE_PREPARATION_MODES = Object.freeze({
   REMOVE_COMMENTS: "remove_comments",
   REMOVE_TESTS: "remove_tests",
   REMOVE_COMMENTS_AND_TESTS: "remove_comments_and_tests",
+  COMPACT: "compact",
 });
 
 const VALID_MODES = new Set(Object.values(SOURCE_PREPARATION_MODES));
@@ -220,6 +221,103 @@ export function removePythonTests(source) {
 }
 
 /**
+ * Removes blank lines and trailing whitespace outside Python string literals.
+ * Multiline string contents are preserved exactly.
+ */
+export function compactPythonWhitespace(source) {
+  const lines = source.split(/(?<=\\n)/);
+  const output = [];
+  let quote = null;
+  let tripleQuoted = false;
+  let escaped = false;
+
+  for (const line of lines) {
+    const lineWithoutEnding = line.replace(/\\r?\\n$/, "");
+    const lineEnding = line.slice(lineWithoutEnding.length);
+    const insideTripleStringAtStart = tripleQuoted;
+
+    if (
+      !insideTripleStringAtStart &&
+      quote === null &&
+      lineWithoutEnding.trim() === ""
+    ) {
+      continue;
+    }
+
+    let index = 0;
+
+    while (index < lineWithoutEnding.length) {
+      const char = lineWithoutEnding[index];
+      const nextThree = lineWithoutEnding.slice(index, index + 3);
+
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+          index += 1;
+          continue;
+        }
+
+        if (char === "\\\\") {
+          escaped = true;
+          index += 1;
+          continue;
+        }
+
+        if (tripleQuoted) {
+          if (nextThree === quote.repeat(3)) {
+            index += 3;
+            quote = null;
+            tripleQuoted = false;
+            continue;
+          }
+
+          index += 1;
+          continue;
+        }
+
+        if (char === quote) {
+          quote = null;
+        }
+
+        index += 1;
+        continue;
+      }
+
+      if (char === "'" || char === '"') {
+        quote = char;
+
+        if (nextThree === char.repeat(3)) {
+          tripleQuoted = true;
+          index += 3;
+        } else {
+          index += 1;
+        }
+
+        continue;
+      }
+
+      index += 1;
+    }
+
+    let compactedLine = lineWithoutEnding;
+
+    if (!tripleQuoted && quote === null) {
+      compactedLine = compactedLine.trimEnd();
+    }
+
+    output.push(compactedLine + lineEnding);
+
+    if (quote !== null && !tripleQuoted && !escaped) {
+      quote = null;
+    }
+
+    escaped = false;
+  }
+
+  return output.join("");
+}
+
+/**
  * Prepares one source file for workflow prompt generation.
  *
  * The supplied content is never mutated.
@@ -250,11 +348,13 @@ export function prepareSourceContent({
 
   const shouldRemoveTests =
     mode === SOURCE_PREPARATION_MODES.REMOVE_TESTS ||
-    mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS;
+    mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS ||
+    mode === SOURCE_PREPARATION_MODES.COMPACT;
 
   const shouldRemoveComments =
     mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS ||
-    mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS;
+    mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS ||
+    mode === SOURCE_PREPARATION_MODES.COMPACT;
 
   if (shouldRemoveTests) {
     const result = removePythonTests(preparedContent);
@@ -265,6 +365,10 @@ export function prepareSourceContent({
 
   if (shouldRemoveComments) {
     preparedContent = removePythonComments(preparedContent);
+  }
+
+  if (mode === SOURCE_PREPARATION_MODES.COMPACT) {
+    preparedContent = compactPythonWhitespace(preparedContent);
   }
 
   return {
