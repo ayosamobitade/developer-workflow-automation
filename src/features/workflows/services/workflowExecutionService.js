@@ -49,6 +49,14 @@ import {
 } from "./workflowPathUtils.js";
 
 
+const MAX_PROMPT_TOKENS = 12000;
+const CHARS_PER_ESTIMATED_TOKEN = 3.5;
+
+function estimatePromptTokens(prompt) {
+    return Math.ceil(String(prompt || "").length / CHARS_PER_ESTIMATED_TOKEN);
+}
+
+
 function assertFunction(value, name) {
     if (typeof value !== "function") {
         throw new TypeError(`${name} must be a function.`);
@@ -771,8 +779,9 @@ export function createWorkflowExecutionController({
 
                 assertNotStopped(shouldStop);
 
-                // 2. Generate the ChatGPT prompt.
-                const prompt = generateWorkflowPrompt({
+                // 2. Generate the prompt and automatically reduce temporary
+                // Python source context if it exceeds the conservative budget.
+                let prompt = generateWorkflowPrompt({
                     workflow,
                     taskId,
                     sourceContents,
@@ -781,9 +790,70 @@ export function createWorkflowExecutionController({
                     definition,
                 });
 
+                const initialPromptSize = estimatePromptTokens(prompt);
+                let compacted = false;
+
+                if (initialPromptSize > MAX_PROMPT_TOKENS) {
+                    const compactedSourceModes = {
+                        ...sourceModes,
+                    };
+
+                    for (const source of taskDefinition.sources || []) {
+                        const sourcePath = sourcePaths[source.id] || source.path || "";
+                        const isPythonSource =
+                            source.type !== "project_tree" &&
+                            String(sourcePath).toLowerCase().endsWith(".py");
+
+                        if (isPythonSource) {
+                            compactedSourceModes[source.id] =
+                                "remove_comments_and_tests";
+                        }
+                    }
+
+                    const compactedSources = await loadTaskSources({
+                        workflow,
+                        task: taskDefinition,
+                        readFile,
+                        sourceModes: compactedSourceModes,
+                    });
+
+                    const compactedPrompt = generateWorkflowPrompt({
+                        workflow,
+                        taskId,
+                        sourceContents: compactedSources.sourceContents,
+                        sourcePaths: compactedSources.sourcePaths,
+                        additionalInstructions,
+                        definition,
+                    });
+
+                    const compactedTokens = estimatePromptTokens(compactedPrompt);
+
+                    emit("prompt_compaction", {
+                        taskId,
+                        initialEstimatedTokens: initialPromptSize,
+                        compactedEstimatedTokens: compactedTokens,
+                        sourceCount: Object.keys(compactedSources.sourceContents).length,
+                    });
+
+                    if (compactedTokens < initialPromptSize) {
+                        prompt = compactedPrompt;
+                        compacted = true;
+                    }
+                }
+
+                const estimatedTokens = estimatePromptTokens(prompt);
+
+                if (estimatedTokens > MAX_PROMPT_TOKENS) {
+                    throw new Error(
+                        `Prompt for task "${taskId}" is too large (${estimatedTokens.toLocaleString()} estimated tokens; budget ${MAX_PROMPT_TOKENS.toLocaleString()}). PromptFlow removed Python comments and top-level tests from temporary source copies but the prompt is still over budget. Reduce the selected source context or split the task; original project files were not changed.`
+                    );
+                }
+
                 emit("prompt_ready", {
                     taskId,
                     promptLength: prompt.length,
+                    estimatedTokens,
+                    compacted,
                 });
 
                 // 3. Send the prompt and wait for completion.
