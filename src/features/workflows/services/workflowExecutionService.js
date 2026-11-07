@@ -806,7 +806,7 @@ export function createWorkflowExecutionController({
 
                         if (isPythonSource) {
                             compactedSourceModes[source.id] =
-                                "remove_comments_and_tests";
+                                "compact";
                         }
                     }
 
@@ -845,7 +845,7 @@ export function createWorkflowExecutionController({
 
                 if (estimatedTokens > MAX_PROMPT_TOKENS) {
                     throw new Error(
-                        `Prompt for task "${taskId}" is too large (${estimatedTokens.toLocaleString()} estimated tokens; budget ${MAX_PROMPT_TOKENS.toLocaleString()}). PromptFlow removed Python comments and top-level tests from temporary source copies but the prompt is still over budget. Reduce the selected source context or split the task; original project files were not changed.`
+                        `Prompt for task "${taskId}" is too large (${estimatedTokens.toLocaleString()} estimated tokens; budget ${MAX_PROMPT_TOKENS.toLocaleString()}). PromptFlow compacted temporary Python source copies by removing comments, top-level tests, blank lines and trailing whitespace while preserving executable statements and string contents. Reduce the selected source context or split the task; original project files were not changed.`
                     );
                 }
 
