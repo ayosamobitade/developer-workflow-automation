@@ -6,6 +6,7 @@ export const SOURCE_PREPARATION_MODES = Object.freeze({
   REMOVE_TESTS: "remove_tests",
   REMOVE_COMMENTS_AND_TESTS: "remove_comments_and_tests",
   COMPACT: "compact",
+  MODEL_CONTRACT: "model_contract",
 });
 
 const VALID_MODES = new Set(Object.values(SOURCE_PREPARATION_MODES));
@@ -317,6 +318,116 @@ export function compactPythonWhitespace(source) {
   return output.join("");
 }
 
+
+/**
+ * Produces a compact model contract for selector-test generation.
+ *
+ * Module imports, model class declarations, fields, relationships, Meta
+ * options, managers, decorators, and method signatures are retained.
+ * Method bodies are replaced with pass because selector tests need the
+ * model interface, not the implementation of unrelated model behavior.
+ *
+ * This is prompt context only; it is not intended to be executable source.
+ */
+export function extractPythonModelContract(source) {
+  const lines = source.split(/(?<=\n)/);
+  const output = [];
+  const classIndents = [];
+  let skippedMethodIndent = null;
+
+  const indentationOf = (line) =>
+    (line.match(/^ */) || [""])[0].length;
+
+  const isBlank = (line) => line.trim() === "";
+
+  const headerIsComplete = (headerLines) => {
+    const lastLine = headerLines.at(-1) || "";
+    return lastLine.trimEnd().endsWith(":");
+  };
+
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const normalized = line.replace(/\r?\n$/, "");
+
+    if (skippedMethodIndent !== null) {
+      if (isBlank(normalized)) {
+        index += 1;
+        continue;
+      }
+
+      const candidateIndent = indentationOf(normalized);
+
+      if (candidateIndent > skippedMethodIndent) {
+        index += 1;
+        continue;
+      }
+
+      skippedMethodIndent = null;
+    }
+
+    if (!isBlank(normalized)) {
+      const indent = indentationOf(normalized);
+
+      while (
+        classIndents.length &&
+        indent <= classIndents.at(-1)
+      ) {
+        classIndents.pop();
+      }
+
+      if (/^class\s+[A-Za-z_]\w*/.test(normalized.trimStart())) {
+        classIndents.push(indent);
+      }
+
+      const isMethod =
+        classIndents.length > 0 &&
+        indent > classIndents.at(-1) &&
+        /^(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(/.test(
+          normalized.trimStart()
+        );
+
+      if (isMethod) {
+        const methodIndent = indent;
+        const headerLines = [line];
+        let headerEnd = index;
+
+        while (
+          !headerIsComplete(headerLines) &&
+          headerEnd + 1 < lines.length
+        ) {
+          headerEnd += 1;
+          headerLines.push(lines[headerEnd]);
+        }
+
+        output.push(...headerLines);
+
+        const finalHeaderLine = headerLines.at(-1) || "";
+        const ending = finalHeaderLine.endsWith("\r\n")
+          ? "\r\n"
+          : "\n";
+
+        output.push(
+          new Array(methodIndent + 5).join(" ") + "pass" + ending
+        );
+
+        skippedMethodIndent = methodIndent;
+        index = headerEnd + 1;
+        continue;
+      }
+    }
+
+    output.push(line);
+    index += 1;
+  }
+
+  return [
+    "# PROMPTFLOW MODEL CONTRACT: method bodies are intentionally omitted.",
+    ...output,
+  ].join("").trimEnd();
+}
+
 /**
  * Prepares one source file for workflow prompt generation.
  *
@@ -349,12 +460,14 @@ export function prepareSourceContent({
   const shouldRemoveTests =
     mode === SOURCE_PREPARATION_MODES.REMOVE_TESTS ||
     mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS ||
-    mode === SOURCE_PREPARATION_MODES.COMPACT;
+    mode === SOURCE_PREPARATION_MODES.COMPACT ||
+    mode === SOURCE_PREPARATION_MODES.MODEL_CONTRACT;
 
   const shouldRemoveComments =
     mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS ||
     mode === SOURCE_PREPARATION_MODES.REMOVE_COMMENTS_AND_TESTS ||
-    mode === SOURCE_PREPARATION_MODES.COMPACT;
+    mode === SOURCE_PREPARATION_MODES.COMPACT ||
+    mode === SOURCE_PREPARATION_MODES.MODEL_CONTRACT;
 
   if (shouldRemoveTests) {
     const result = removePythonTests(preparedContent);
@@ -367,7 +480,14 @@ export function prepareSourceContent({
     preparedContent = removePythonComments(preparedContent);
   }
 
-  if (mode === SOURCE_PREPARATION_MODES.COMPACT) {
+  if (mode === SOURCE_PREPARATION_MODES.MODEL_CONTRACT) {
+    preparedContent = extractPythonModelContract(preparedContent);
+  }
+
+  if (
+    mode === SOURCE_PREPARATION_MODES.COMPACT ||
+    mode === SOURCE_PREPARATION_MODES.MODEL_CONTRACT
+  ) {
     preparedContent = compactPythonWhitespace(preparedContent);
   }
 
