@@ -27,6 +27,10 @@ import {
     MAX_PROMPT_TOKENS,
 } from "../../services/workflowExecutionService.js";
 
+import {
+    prepareSourceContent,
+} from "../../services/sourcePreparationService.js";
+
 
 const MODEL_PATH =
     "core/finance/payments/models/payment.py";
@@ -461,6 +465,40 @@ test(
             result.workflow.status,
             "failed"
         );
+    }
+);
+
+test(
+    "compact source preparation removes blank lines without changing executable strings",
+    () => {
+        const source = [
+            "class Example:",
+            '    """A description',
+            "",
+            "    with an intentional blank line",
+            '    """',
+            "",
+            "    def value(self):",
+            '        text = "keep  internal spaces  "',
+            "        return text  ",
+            "",
+            "# removable comment",
+            "",
+        ].join("\n");
+
+        const prepared = prepareSourceContent({
+            content: source,
+            path: "example.py",
+            mode: "compact",
+        });
+
+        assert.equal(prepared.originalContent, source);
+        assert.equal(prepared.changed, true);
+        assert.match(prepared.content, /with an intentional blank line/);
+        assert.match(prepared.content, /text = "keep  internal spaces  "/);
+        assert.match(prepared.content, /return text\n/);
+        assert.doesNotMatch(prepared.content, /removable comment/);
+        assert.doesNotMatch(prepared.content, /\n\n/);
     }
 );
 
