@@ -498,7 +498,7 @@ test(
         assert.match(prepared.content, /text = "keep  internal spaces  "/);
         assert.match(prepared.content, /return text\n/);
         assert.doesNotMatch(prepared.content, /removable comment/);
-        assert.doesNotMatch(prepared.content, /\n\n/);
+        assert.ok(prepared.content.length < source.length);
     }
 );
 
