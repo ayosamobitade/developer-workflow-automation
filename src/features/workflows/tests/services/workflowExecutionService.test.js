@@ -469,6 +469,6 @@ test(
     () => {
         assert.equal(estimatePromptTokens(""), 0);
         assert.equal(estimatePromptTokens("x".repeat(350)), 100);
-        assert.equal(MAX_PROMPT_TOKENS, 12000);
+        assert.equal(MAX_PROMPT_TOKENS, 24000);
     }
 );
