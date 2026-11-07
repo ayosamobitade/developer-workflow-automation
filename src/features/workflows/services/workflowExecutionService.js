@@ -49,7 +49,7 @@ import {
 } from "./workflowPathUtils.js";
 
 
-export const MAX_PROMPT_TOKENS = 12000;
+export const MAX_PROMPT_TOKENS = 24000;
 const CHARS_PER_ESTIMATED_TOKEN = 3.5;
 
 export function estimatePromptTokens(prompt) {
