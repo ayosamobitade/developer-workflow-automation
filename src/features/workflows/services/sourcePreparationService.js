@@ -257,7 +257,7 @@ export function compactPythonWhitespace(source) {
           continue;
         }
 
-        if (char === "\\\\") {
+        if (char === "\\") {
           escaped = true;
           index += 1;
           continue;
