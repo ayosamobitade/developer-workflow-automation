@@ -23,6 +23,8 @@ import {
 
 import {
     createWorkflowExecutionController,
+    estimatePromptTokens,
+    MAX_PROMPT_TOKENS,
 } from "../../services/workflowExecutionService.js";
 
 
@@ -459,5 +461,14 @@ test(
             result.workflow.status,
             "failed"
         );
+    }
+);
+
+test(
+    "estimates prompt tokens conservatively and exposes the configured budget",
+    () => {
+        assert.equal(estimatePromptTokens(""), 0);
+        assert.equal(estimatePromptTokens("x".repeat(350)), 100);
+        assert.equal(MAX_PROMPT_TOKENS, 12000);
     }
 );
