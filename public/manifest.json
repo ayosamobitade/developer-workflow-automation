@@ -29,12 +29,22 @@
   },
 
   "background": {
-    "scripts": [
-      "background.js"
-    ]
-  },
+    "scripts": ["background.js"],
+    "type": "module"
+},
 
   "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "response-stream.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://chatgpt.com/*",

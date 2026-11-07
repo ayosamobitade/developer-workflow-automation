@@ -201,7 +201,6 @@ function getModelStatusClass(status) {
     }
 }
 
-
 export default function DjangoModelWorkflowPanel({
     activeTabId,
     nativeProjectId,
@@ -213,6 +212,7 @@ export default function DjangoModelWorkflowPanel({
     writeNativeProjectFile,
     getNativeProjectFiles,
     ensureWriteAuthorization,
+    getWorkflowAuthorization,
     sendPromptToChatGPT,
 }) {
     const [workflow, setWorkflow] = useState(null);
@@ -262,7 +262,120 @@ export default function DjangoModelWorkflowPanel({
     nativeWorkingDirectoryRef.current =
         nativeWorkingDirectory || "";
 
+    // --------------------------------------------------------
+    // BACKGROUND MESSAGE/EVENT HANDLING
+    // --------------------------------------------------------
+    useEffect(() => {
+        const handleBackgroundMessage = (message) => {
+            if (
+                message?.type ===
+                "PROMPTFLOW_BACKGROUND_DESTINATION_CONFIRMATION"
+            ) {
+                const request = message.request;
 
+                if (
+                    request?.workflowTabId !== activeTabIdRef.current
+                ) {
+                    return;
+                }
+
+                setDestinationDialog({
+                    requestId: request.requestId,
+                    taskId: request.taskId,
+                    entries: getDestinationEntries(
+                        request.destinations,
+                        request.taskId
+                    ),
+                });
+
+                return;
+            }
+
+            if (
+                message?.type !==
+                "PROMPTFLOW_BACKGROUND_WORKFLOW_EVENT"
+            ) {
+                return;
+            }
+
+            if (
+                message.workflowTabId !== activeTabIdRef.current
+            ) {
+                return;
+            }
+
+            switch (message.event) {
+                case "workflow_started":
+                    setIsRunning(true);
+                    setIsStopping(false);
+                    setError("");
+                    break;
+
+                case "workflow_state_changed":
+                    if (message.workflow) {
+                        setWorkflow(message.workflow);
+                    }
+                    break;
+
+                case "workflow_event":
+                    if (message.workflowEvent) {
+                        setEvents((previous) => [
+                            ...previous,
+                            message.workflowEvent,
+                        ].slice(-40));
+                    }
+                    break;
+
+                case "workflow_finished": {
+                    const result = message.result;
+
+                    if (result?.workflow) {
+                        setWorkflow(result.workflow);
+                    }
+
+                    setIsRunning(false);
+                    setIsStopping(false);
+
+                    if (result?.success) {
+                        setNotice(
+                            "Django model workflow completed successfully. All required output files were written."
+                        );
+                        setError("");
+                    } else {
+                        setError(
+                            result?.error ||
+                            "Workflow execution stopped. Review the failed task and retry."
+                        );
+                    }
+
+                    break;
+                }
+
+                case "workflow_failed":
+                case "workflow_start_failed":
+                    setIsRunning(false);
+                    setIsStopping(false);
+                    setError(
+                        message.error ||
+                        "Background workflow execution failed."
+                    );
+                    break;
+
+                default:
+                    break;
+            }
+        };
+
+        browser.runtime.onMessage.addListener(
+            handleBackgroundMessage
+        );
+
+        return () => {
+            browser.runtime.onMessage.removeListener(
+                handleBackgroundMessage
+            );
+        };
+    }, []);
     // ---------------------------------------------------------
     // RESTORE SAVED WORKFLOW AND BATCH
     // ---------------------------------------------------------
@@ -636,50 +749,79 @@ export default function DjangoModelWorkflowPanel({
     }
 
 
-    function handleConfirmDestinations() {
-        if (!destinationDialog) return;
+async function handleConfirmDestinations() {
+    if (!destinationDialog) return;
 
-        const result = {};
+    const result = {};
 
-        for (const entry of destinationDialog.entries) {
-            if (!entry.path.trim()) {
-                setError(
-                    `Enter a destination for ${entry.name}.`
-                );
-                return;
-            }
-
-            if (isInitFilePath(entry.path)) {
-                setError(
-                    `The destination "${entry.path}" is not allowed. PromptFlow does not generate __init__.py files.`
-                );
-                return;
-            }
-
-            result[entry.key] = {
-                path: entry.path.trim(),
-                confirmed: true,
-            };
+    for (const entry of destinationDialog.entries) {
+        if (!entry.path.trim()) {
+            setError(`Enter a destination for ${entry.name}.`);
+            return;
         }
 
+        if (isInitFilePath(entry.path)) {
+            setError(
+                `The destination "${entry.path}" is not allowed. PromptFlow does not generate __init__.py files.`
+            );
+            return;
+        }
+
+        result[entry.key] = {
+            path: entry.path.trim(),
+            confirmed: true,
+        };
+    }
+
+    if (destinationDialog.requestId) {
+        try {
+            const response = await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_DESTINATION_CONFIRMATION_RESULT",
+                requestId: destinationDialog.requestId,
+                confirmation: result,
+            });
+
+            if (!response?.success) {
+                throw new Error(
+                    response?.error || "Unable to confirm destinations."
+                );
+            }
+        } catch (err) {
+            setError(err.message);
+            return;
+        }
+    } else {
         const resolve = destinationResolverRef.current;
-
         destinationResolverRef.current = null;
-        setDestinationDialog(null);
-        setError("");
-
         resolve?.(result);
     }
 
+    setDestinationDialog(null);
+    setError("");
+}
 
-    function handleCancelDestinations() {
+
+async function handleCancelDestinations() {
+    if (!destinationDialog) return;
+
+    if (destinationDialog.requestId) {
+        try {
+            await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_DESTINATION_CONFIRMATION_RESULT",
+                requestId: destinationDialog.requestId,
+                confirmation: null,
+            });
+        } catch (err) {
+            setError(err.message);
+        }
+    } else {
         const resolve = destinationResolverRef.current;
-
         destinationResolverRef.current = null;
-        setDestinationDialog(null);
-
         resolve?.(null);
     }
+
+    setDestinationDialog(null);
+}
 
 
     // ---------------------------------------------------------
@@ -817,41 +959,66 @@ export default function DjangoModelWorkflowPanel({
     // EXECUTE ONE WORKFLOW
     // ---------------------------------------------------------
 
-    async function executeWorkflow(initialWorkflow) {
-        if (
-            isRunning ||
-            !nativeProjectId ||
-            !initialWorkflow
-        ) {
-            return null;
-        }
 
-        if (
-            initialWorkflow.project?.id !== nativeProjectId ||
-            (initialWorkflow.input?.workingDirectory || "") !==
-                (nativeWorkingDirectory || "")
-        ) {
-            setError(
-                "The saved workflow belongs to a different project or working directory."
+
+async function executeWorkflow(initialWorkflow) {
+    if (
+        isRunning ||
+        !nativeProjectId ||
+        !initialWorkflow
+    ) {
+        return null;
+    }
+
+    const runTabId = activeTabId;
+    const runProjectId = nativeProjectId;
+    const runWorkingDirectory =
+        nativeWorkingDirectory || "";
+
+    if (
+        initialWorkflow.project?.id !== runProjectId ||
+        (initialWorkflow.input?.workingDirectory || "") !==
+            runWorkingDirectory
+    ) {
+        setError(
+            "The saved workflow belongs to a different project or working directory."
+        );
+        return null;
+    }
+
+    try {
+        const {
+            readToken,
+            writeToken,
+        } = await getWorkflowAuthorization();
+
+        if (!readToken || !writeToken) {
+            throw new Error(
+                "Project authorization is incomplete."
             );
-            return null;
         }
 
-        try {
-            await ensureWriteAuthorization();
+        const response = await browser.runtime.sendMessage({
+            type: "PROMPTFLOW_BACKGROUND_WORKFLOW_START",
+            workflow: initialWorkflow,
+            workflowTabId: runTabId,
+            chatTabId: runTabId,
+            projectId: runProjectId,
+            workingDirectory: runWorkingDirectory,
+            readToken,
+            writeToken,
+            sourceModes: {
+                model: sourceMode,
+            },
+            additionalInstructions: {},
+        });
 
-        } catch (err) {
-            setError(
-                err.message ||
-                "Local write authorization is required."
+        if (!response?.success || !response.accepted) {
+            throw new Error(
+                response?.error ||
+                "The background workflow could not be started."
             );
-            return null;
         }
-
-        const runTabId = activeTabId;
-        const runProjectId = nativeProjectId;
-        const runWorkingDirectory =
-            nativeWorkingDirectory || "";
 
         stopRequestedRef.current = false;
 
@@ -861,62 +1028,27 @@ export default function DjangoModelWorkflowPanel({
             workingDirectory: runWorkingDirectory,
         };
 
-        setIsStopping(false);
         setIsRunning(true);
+        setIsStopping(false);
         setError("");
-        setNotice("");
-        setEvents([]);
+        setNotice(
+            "Workflow accepted by the background coordinator. It will continue when you switch tabs."
+        );
 
-        try {
-            const result = await runWorkflowController({
-                initialWorkflow,
-                runTabId,
-                runProjectId,
-                runWorkingDirectory,
-                preparationMode: sourceMode,
-            });
+        return response;
 
-            const sameContext =
-                activeTabIdRef.current === runTabId &&
-                nativeProjectIdRef.current === runProjectId;
+    } catch (err) {
+        setIsRunning(false);
+        setIsStopping(false);
 
-            if (!mountedRef.current || !sameContext) {
-                return result;
-            }
+        setError(
+            err.message ||
+            "Unable to start the background workflow."
+        );
 
-            if (result?.workflow) {
-                setWorkflow(result.workflow);
-            }
-
-            if (result?.success) {
-                setNotice(
-                    "Django model workflow completed successfully. All required output files were written."
-                );
-                setError("");
-            } else {
-                setError(
-                    result?.error ||
-                    "Workflow execution stopped. Review the failed task and retry."
-                );
-            }
-
-            return result;
-
-        } catch (err) {
-            setError(
-                err.message ||
-                "An unexpected workflow execution error occurred."
-            );
-            return null;
-
-        } finally {
-            if (mountedRef.current) {
-                setIsRunning(false);
-                setIsStopping(false);
-            }
-        }
+        return null;
     }
-
+}
 
     // ---------------------------------------------------------
     // SEED AN EXISTING MODEL FOR SINGLE-MODE EXECUTION
@@ -1145,15 +1277,31 @@ export default function DjangoModelWorkflowPanel({
     // SINGLE WORKFLOW STOP
     // ---------------------------------------------------------
 
-    function handleStopWorkflow() {
+    async function handleStopWorkflow() {
         stopRequestedRef.current = true;
         setIsStopping(true);
 
         setNotice(
             "Stop requested. PromptFlow will stop the current workflow operation."
         );
-    }
 
+        try {
+            const response = await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_WORKFLOW_STOP",
+                workflowTabId: activeTabId,
+            });
+
+            if (!response?.success) {
+                setIsStopping(false);
+                setError(
+                    response?.error || "Unable to stop the workflow."
+                );
+            }
+        } catch (err) {
+            setIsStopping(false);
+            setError(err.message);
+        }
+    }
 
     // ---------------------------------------------------------
     // RESET SINGLE WORKFLOW

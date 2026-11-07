@@ -8,6 +8,7 @@ import stat
 import struct
 import sys
 import fcntl
+# import black
 
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -1118,6 +1119,18 @@ def write_project_file(
 
     if not isinstance(content, str):
         raise ValueError("File content must be a string.")
+
+    # if Path(relative_path).suffix.lower() == ".py":
+    #     try:
+    #         content = black.format_str(
+    #             content,
+    #             mode=black.FileMode(),
+    #         )
+    #     except black.InvalidInput as error:
+    #         raise ValueError(
+    #             f"Generated Python file is invalid and could not be "
+    #             f"formatted: {error}"
+    #         ) from error
 
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_WRITE_SIZE:

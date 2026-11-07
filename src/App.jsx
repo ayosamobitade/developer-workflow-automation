@@ -2799,6 +2799,26 @@ useEffect(() => {
                                     readToken
                                 );
                             }}
+
+                            getWorkflowAuthorization={async () => {
+                                const readToken = await ensureNativeReadSession(
+                                    nativeProjectId,
+                                    nativeWorkingDirectory,
+                                    activeTabId
+                                );
+
+                                const writeToken = await ensureNativeWriteSession(
+                                    nativeProjectId,
+                                    nativeWorkingDirectory,
+                                    activeTabId
+                                );
+
+                                return {
+                                    readToken,
+                                    writeToken,
+                                };
+                            }}
+
                             ensureWriteAuthorization={async () =>
                                 ensureNativeWriteSession(
                                     nativeProjectId,

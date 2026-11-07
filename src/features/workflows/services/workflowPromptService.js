@@ -3,7 +3,7 @@ import {
 } from "../definitions/django-model-workflow.js";
 
 import {
-    filterProjectTree,
+    filterModelProjectTree,
     isInitFilePath,
 } from "./workflowPathUtils.js";
 
@@ -45,7 +45,7 @@ function validateSourceContents(task, sourceContents) {
 
 
 function formatProjectTree(projectTree) {
-    const filteredTree = filterProjectTree(projectTree);
+    const filteredTree = filterModelProjectTree(projectTree);
 
     if (!filteredTree.trim()) {
         throw new Error(
@@ -128,6 +128,38 @@ function formatExpectedOutputs(task, destinationHints = {}) {
 }
 
 
+// function formatOutputInstructions(task) {
+//     const instructions = task.outputs.map((output, index) => {
+//         const startMarker =
+//             `<<<PROMPTFLOW_OUTPUT_START:${output.id}>>>`;
+
+//         const endMarker =
+//             `<<<PROMPTFLOW_OUTPUT_END:${output.id}>>>`;
+
+//         return [
+//             `${index + 1}. ${output.name}`,
+//             "",
+//             `Begin this file with exactly: ${startMarker}`,
+//             `End this file with exactly: ${endMarker}`,
+//             "",
+//             "Put only the complete file content between these markers.",
+//         ].join("\n");
+//     });
+
+//     return [
+//         "OUTPUT FORMATTING REQUIREMENTS",
+//         "==============================",
+//         "",
+//         "You must produce every required output as a separate, clearly marked file.",
+//         "Do not combine multiple files into one code block.",
+//         "Do not omit any required output.",
+//         "Do not place explanations inside the file content.",
+//         "Do not change the output marker identifiers.",
+//         "",
+//         ...instructions,
+//     ].join("\n");
+// }
+
 function formatOutputInstructions(task) {
     const instructions = task.outputs.map((output, index) => {
         const startMarker =
@@ -136,25 +168,53 @@ function formatOutputInstructions(task) {
         const endMarker =
             `<<<PROMPTFLOW_OUTPUT_END:${output.id}>>>`;
 
+        const language =
+            output.type === "python" ? "python" : "";
+
         return [
-            `${index + 1}. ${output.name}`,
+            `OUTPUT ${index + 1}: ${output.name}`,
             "",
-            `Begin this file with exactly: ${startMarker}`,
-            `End this file with exactly: ${endMarker}`,
+            `Start marker: ${startMarker}`,
+            `End marker: ${endMarker}`,
             "",
-            "Put only the complete file content between these markers.",
+            "Required structure:",
+            startMarker,
+            `\`\`\`${language}`,
+            "[THE ENTIRE FILE CONTENT MUST BE HERE]",
+            "```",
+            endMarker,
+            "",
+            "The markers must be outside the code fence.",
+            "The opening and closing code fences must be inside the markers.",
+            "Replace the placeholder with the complete file content.",
         ].join("\n");
     });
 
     return [
-        "OUTPUT FORMATTING REQUIREMENTS",
-        "==============================",
+        "STRICT OUTPUT FORMATTING REQUIREMENTS",
+        "======================================",
         "",
-        "You must produce every required output as a separate, clearly marked file.",
-        "Do not combine multiple files into one code block.",
-        "Do not omit any required output.",
-        "Do not place explanations inside the file content.",
-        "Do not change the output marker identifiers.",
+        "Every required output MUST be returned as a complete file.",
+        "",
+        "MANDATORY RULES:",
+        "1. Put the ENTIRE file inside exactly ONE Markdown fenced code block.",
+        "2. The code block must contain everything, from the first line to the last line of the file.",
+        "3. Do not put any source code before the opening code fence.",
+        "4. Do not put any source code after the closing code fence.",
+        "5. Never split a file across multiple code blocks.",
+        "6. Never put class declarations, function declarations, imports, docstrings, comments, decorators, or variable assignments in ordinary Markdown paragraphs.",
+        "7. Preserve the correct indentation throughout the entire file.",
+        "8. For Python, use four spaces for each indentation level. Never use tabs.",
+        "9. Do not include explanations, headings, labels, or commentary inside the code block.",
+        "10. Do not include the word Code or any interface label in the source file.",
+        "11. Do not use placeholders, omissions, or abbreviated implementations.",
+        "12. Generate all required files independently.",
+        "13. Do not put Markdown code fences around the output markers.",
+        "14. Do not change, omit, or modify any output marker.",
+        "",
+        "IMPORTANT: The output markers are plain text delimiters. The code fence belongs INSIDE each pair of markers, not outside them.",
+        "",
+        "OUTPUT STRUCTURES:",
         "",
         ...instructions,
     ].join("\n");
@@ -219,9 +279,15 @@ export function generateWorkflowPrompt({
             `Model file: ${workflow.input.modelPath}`,
         ].join("\n"),
 
-        formatProjectTree(
-            workflow.input.projectTree
-        ),
+        ...(task.sources.some(
+            (source) => source.type === "project_tree"
+        )
+            ? [
+                formatProjectTree(
+                    workflow.input.projectTree
+                ),
+            ]
+            : []),
 
         [
             "TASK INSTRUCTIONS",
@@ -259,6 +325,21 @@ export function generateWorkflowPrompt({
         ].join("\n"));
     }
 
+    // sections.push([
+    //     "IMPORTANT REQUIREMENTS",
+    //     "======================",
+    //     "1. Follow the supplied project architecture and naming conventions.",
+    //     "2. Do not invent models, files, or project structures that were not requested.",
+    //     "3. Preserve compatibility with the supplied source files.",
+    //     "4. Generate complete, production-quality Python files.",
+    //     "5. Produce all required outputs.",
+    //     "6. Keep every output between its exact PromptFlow markers.",
+    //     "7. Do not put Markdown code fences around the output markers.",
+    //     "8. Do not include commentary between output markers.",
+    //     "9. Never generate, modify, or include Python __init__.py files.",
+    //     "10. If a requirement is ambiguous or necessary information is missing, explain the issue instead of inventing implementation details.",
+    // ].join("\n"));
+
     sections.push([
         "IMPORTANT REQUIREMENTS",
         "======================",
@@ -266,12 +347,15 @@ export function generateWorkflowPrompt({
         "2. Do not invent models, files, or project structures that were not requested.",
         "3. Preserve compatibility with the supplied source files.",
         "4. Generate complete, production-quality Python files.",
-        "5. Produce all required outputs.",
-        "6. Keep every output between its exact PromptFlow markers.",
-        "7. Do not put Markdown code fences around the output markers.",
-        "8. Do not include commentary between output markers.",
-        "9. Never generate, modify, or include Python __init__.py files.",
-        "10. If a requirement is ambiguous or necessary information is missing, explain the issue instead of inventing implementation details.",
+        "5. Produce every required output.",
+        "6. Put the entire content of each output inside exactly one Python code block.",
+        "7. Nothing belonging to a generated file may appear outside its code block.",
+        "8. Keep the output markers outside the code fences.",
+        "9. Keep the opening and closing code fences inside the corresponding output markers.",
+        "10. Preserve all Python indentation using four spaces per indentation level.",
+        "11. Do not include explanations, commentary, or Markdown headings between output markers.",
+        "12. Never generate, modify, or include Python __init__.py files.",
+        "13. If a requirement is ambiguous or necessary information is missing, explain the issue instead of inventing implementation details.",
     ].join("\n"));
 
     return sections.join("\n\n");

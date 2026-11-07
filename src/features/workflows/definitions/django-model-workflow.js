@@ -34,7 +34,7 @@ export const DJANGO_MODEL_WORKFLOW = {
 
         requireOutputValidation: true,
 
-        requireDestinationConfirmation: true,
+        requireDestinationConfirmation: false,
 
         preserveOriginalSources: true,
 
@@ -168,7 +168,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,
@@ -190,7 +190,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,
@@ -259,7 +259,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,
@@ -346,7 +346,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,
@@ -432,7 +432,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,
@@ -518,7 +518,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                     destination: {
                         mode: "infer_from_project_tree",
 
-                        requiresConfirmation: true,
+                        requiresConfirmation: false,
                     },
 
                     required: true,

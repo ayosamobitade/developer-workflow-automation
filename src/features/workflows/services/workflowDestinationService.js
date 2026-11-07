@@ -358,19 +358,30 @@ export function resolveWorkflowOutputDestination({
                 `No destination rule exists for output "${outputId}".`,
         };
     }
-
     return {
         taskId,
         outputId,
         path,
         source: "convention",
-        requiresConfirmation: true,
-        confirmed: false,
+        requiresConfirmation: false,
+        confirmed: true,
         exists: fileExists(path, files),
         alternatives: [],
         reason:
-            "The destination was generated using the Django model path convention. Confirm it before writing.",
+            "The destination was generated automatically using the Django model path convention.",
     };
+    // return {
+    //     taskId,
+    //     outputId,
+    //     path,
+    //     source: "convention",
+    //     requiresConfirmation: true,
+    //     confirmed: false,
+    //     exists: fileExists(path, files),
+    //     alternatives: [],
+    //     reason:
+    //         "The destination was generated using the Django model path convention. Confirm it before writing.",
+    // };
 }
 
 

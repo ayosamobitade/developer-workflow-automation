@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+import os
 
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,7 @@ REQUIRED_IMPORTS = [
 ]
 
 
-SECURE_IMPLEMENTATION = r'''
+SECURE_IMPLEMENTATION = r
 # ---------------------------------------------------------------------
 # SECURE PROJECT FILE OPERATIONS
 # ---------------------------------------------------------------------
@@ -369,7 +370,7 @@ def write_project_file(
 
         if parent_fd is not None:
             os.close(parent_fd)
-'''
+
 
 
 def add_imports(source: str) -> str:
