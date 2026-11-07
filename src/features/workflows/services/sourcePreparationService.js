@@ -225,14 +225,14 @@ export function removePythonTests(source) {
  * Multiline string contents are preserved exactly.
  */
 export function compactPythonWhitespace(source) {
-  const lines = source.split(/(?<=\\n)/);
+  const lines = source.split(/(?<=\n)/);
   const output = [];
   let quote = null;
   let tripleQuoted = false;
   let escaped = false;
 
   for (const line of lines) {
-    const lineWithoutEnding = line.replace(/\\r?\\n$/, "");
+    const lineWithoutEnding = line.replace(/\r?\n$/, "");
     const lineEnding = line.slice(lineWithoutEnding.length);
     const insideTripleStringAtStart = tripleQuoted;
 
