@@ -503,6 +503,68 @@ test(
 );
 
 test(
+    "model contract preparation preserves model structure and method signatures while omitting method bodies",
+    () => {
+        const source = [
+            "from django.db import models",
+            "",
+            "class Payment(models.Model):",
+            "    amount = models.DecimalField(max_digits=10, decimal_places=2)",
+            "    customer = models.ForeignKey(Customer, on_delete=models.CASCADE)",
+            "",
+            "    class Meta:",
+            "        ordering = [\"-created_at\"]",
+            "        indexes = [models.Index(fields=[\"customer\"])]",
+            "",
+            "    def clean(self):",
+            "        if self.amount < 0:",
+            "            raise ValidationError(\"Amount cannot be negative.\")",
+            "",
+            "    def save(self, *args, **kwargs):",
+            "        self.full_clean()",
+            "        return super().save(*args, **kwargs)",
+            "",
+        ].join("\n");
+
+        const prepared = prepareSourceContent({
+            content: source,
+            path: "payment.py",
+            mode: "model_contract",
+        });
+
+        assert.equal(prepared.originalContent, source);
+        assert.match(prepared.content, /from django\.db import models/);
+        assert.match(prepared.content, /amount = models\.DecimalField/);
+        assert.match(prepared.content, /models\.ForeignKey/);
+        assert.match(prepared.content, /class Meta:/);
+        assert.match(prepared.content, /ordering =/);
+        assert.match(prepared.content, /def clean\(self\):/);
+        assert.match(prepared.content, /def save\(self, \*args, \*\*kwargs\):/);
+        assert.match(prepared.content, /    pass/);
+        assert.doesNotMatch(prepared.content, /Amount cannot be negative/);
+        assert.doesNotMatch(prepared.content, /self\.full_clean\(\)/);
+        assert.ok(prepared.content.length < source.length);
+    }
+);
+
+test(
+    "create_selector_test supports the model contract preparation mode",
+    () => {
+        const task = DJANGO_MODEL_WORKFLOW.tasks.find(
+            (item) => item.id === "create_selector_test"
+        );
+
+        const modelSource = task.sources.find(
+            (source) => source.id === "model"
+        );
+
+        assert.ok(
+            modelSource.preparation.supportedModes.includes("model_contract")
+        );
+    }
+);
+
+test(
     "estimates prompt tokens conservatively and exposes the configured budget",
     () => {
         assert.equal(estimatePromptTokens(""), 0);
