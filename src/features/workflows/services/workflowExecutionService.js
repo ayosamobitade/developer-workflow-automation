@@ -806,7 +806,10 @@ export function createWorkflowExecutionController({
 
                         if (isPythonSource) {
                             compactedSourceModes[source.id] =
-                                "compact";
+                                taskId === "create_selector_test" &&
+                                source.id === "model"
+                                    ? "model_contract"
+                                    : "compact";
                         }
                     }
 
