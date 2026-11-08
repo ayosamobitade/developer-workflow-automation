@@ -848,7 +848,7 @@ export function createWorkflowExecutionController({
 
                 if (estimatedTokens > MAX_PROMPT_TOKENS) {
                     throw new Error(
-                        `Prompt for task "${taskId}" is too large (${estimatedTokens.toLocaleString()} estimated tokens; budget ${MAX_PROMPT_TOKENS.toLocaleString()}). PromptFlow compacted temporary Python source copies by removing comments, top-level tests, blank lines and trailing whitespace while preserving executable statements and string contents. Reduce the selected source context or split the task; original project files were not changed.`
+                        `Prompt for task "${taskId}" is too large (${estimatedTokens.toLocaleString()} estimated tokens; budget ${MAX_PROMPT_TOKENS.toLocaleString()}). PromptFlow compacted temporary Python source copies by removing comments, top-level tests, blank lines and trailing whitespace. For create_selector_test, it also reduced the model source to a structural contract while retaining fields, relationships, constraints, metadata and method signatures. Reduce the selected source context or split the task; original project files were not changed.`
                     );
                 }
 
