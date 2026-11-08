@@ -313,6 +313,7 @@ export const DJANGO_MODEL_WORKFLOW = {
                             "remove_tests",
                             "remove_comments_and_tests",
                             "compact",
+                            "model_contract",
                         ],
                     },
                 },
