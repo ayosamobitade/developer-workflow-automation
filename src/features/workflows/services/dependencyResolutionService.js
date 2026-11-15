@@ -8,7 +8,7 @@ export function normalizeDependencyPath(path) {
         throw new Error("ChatGPT requested a dependency without a file path.");
     }
 
-    const normalized = path.trim().replace(/\\\\/g, "/");
+    const normalized = path.trim().replace(/\\/g, "/");
 
     if (
         normalized.startsWith("/") ||
