@@ -31,6 +31,10 @@ import {
     prepareSourceContent,
 } from "../../services/sourcePreparationService.js";
 
+import {
+    generateWorkflowPrompt,
+} from "../../services/workflowPromptService.js";
+
 
 const MODEL_PATH =
     "core/finance/payments/models/payment.py";
@@ -358,6 +362,56 @@ test(
             ).status,
             "completed"
         );
+    }
+);
+
+test(
+    "includes only the model file tree once in the generated prompt",
+    () => {
+        const projectTree = [
+            "educational/",
+            "└── core/",
+            "    └── finance/",
+            "        └── payments/",
+            "            ├── models/",
+            "            │   └── payment.py",
+            "            ├── services/",
+            "            │   └── payment_service.py",
+            "            └── views.py",
+            "    └── communication/",
+            "        └── email/",
+            "            └── models/",
+            "                └── email_message.py",
+            "└── config/",
+            "    └── settings.py",
+        ].join("\n");
+
+        const workflow = createWorkflowInstance({
+            definition: MODEL_RECOVERY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree,
+        });
+
+        const prompt = generateWorkflowPrompt({
+            workflow,
+            taskId: "create_model",
+            sourceContents: {
+                project_tree: projectTree,
+            },
+            sourcePaths: {
+                project_tree: "Project file tree",
+            },
+        });
+
+        assert.match(prompt, /MODEL FILE TREE/);
+        assert.match(prompt, /payment\.py/);
+        assert.match(prompt, /email_message\.py/);
+        assert.doesNotMatch(prompt, /payment_service\.py/);
+        assert.doesNotMatch(prompt, /views\.py/);
+        assert.doesNotMatch(prompt, /settings\.py/);
+        assert.doesNotMatch(prompt, /SOURCE FILE: Project file tree/);
     }
 );
 
