@@ -1165,6 +1165,7 @@ export function createWorkflowExecutionController({
         // A read/permission error must never be mistaken for an empty file.
         if (
             dependency &&
+            dependency.exists !== false &&
             typeof dependency.content !== "string"
         ) {
             throw new Error(
