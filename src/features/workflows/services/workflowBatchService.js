@@ -723,6 +723,7 @@ export async function runWorkflowBatch({
 
                     workflow.input.existingFiles = plan.existingFiles;
                     workflow.input.implementationPlan = plan;
+                    workflow.input.automaticContinuation = true;
 
                     const existingModel = plan.existingFiles["create_model.model"];
 
@@ -736,6 +737,7 @@ export async function runWorkflowBatch({
                         });
                         workflow.input.existingFiles = plan.existingFiles;
                         workflow.input.implementationPlan = plan;
+                        workflow.input.automaticContinuation = true;
                     }
 
                     model.workflow = structuredClone(workflow);
