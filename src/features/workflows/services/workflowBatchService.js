@@ -6,12 +6,6 @@ import {
 
 import {
     createWorkflowInstance,
-    startWorkflowTask,
-    storeWorkflowOutput,
-    validateWorkflowOutput,
-    assignWorkflowOutputDestination,
-    markWorkflowOutputWritten,
-    completeWorkflowTask,
     retryWorkflowTask,
     WORKFLOW_TASK_STATUS,
 } from "./workflowService.js";
@@ -381,67 +375,6 @@ function createModelWorkflow(batch, model) {
     workflow.input.workingDirectory = batch.workingDirectory || "";
 
     return workflow;
-}
-
-
-/**
- * Seed create_model as completed using the normal workflow lifecycle.
- *
- * This is used only when the user chooses "Continue from existing model".
- * No project file is written or modified here.
- */
-async function seedExistingModel({
-    workflow,
-    modelPath,
-    readFile,
-}) {
-    const response = await readFile(modelPath);
-
-    if (
-        !response ||
-        typeof response.content !== "string" ||
-        !response.content.trim()
-    ) {
-        throw new Error(
-            `The existing model "${modelPath}" could not be read or is empty.`
-        );
-    }
-
-    let next = startWorkflowTask(
-        workflow,
-        "create_model",
-        DJANGO_MODEL_WORKFLOW
-    );
-
-    next = storeWorkflowOutput(next, {
-        taskId: "create_model",
-        outputId: "model",
-        content: response.content,
-    });
-
-    next = validateWorkflowOutput(next, {
-        taskId: "create_model",
-        outputId: "model",
-    });
-
-    next = assignWorkflowOutputDestination(next, {
-        taskId: "create_model",
-        outputId: "model",
-        path: modelPath,
-        confirmed: true,
-    });
-
-    next = markWorkflowOutputWritten(next, {
-        taskId: "create_model",
-        outputId: "model",
-    });
-
-    next = completeWorkflowTask(
-        next,
-        "create_model"
-    );
-
-    return next;
 }
 
 
