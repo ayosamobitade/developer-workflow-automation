@@ -164,7 +164,7 @@ function App() {
         await Promise.allSettled(tokens.map(revokeSession));
     }, [revokeSession]);
 
-    const ensureReadSession = useCallback(async (projectId, directory = "", tabId = activeTabId) => {
+    const ensureReadSession = useCallback(async (projectId, directory = "", tabId) => {
         if (!projectId) throw new Error("A registered project is required.");
 
         let record = sessionsRef.current.get(tabId);
@@ -229,7 +229,7 @@ function App() {
         ].filter(Boolean))];
         await Promise.allSettled(tokens.map(revokeSession));
         return record.readToken;
-    }, [activeTabId, createSession, getSessionRecord, revokeSession, revokeTabSessions]);
+    }, [createSession, getSessionRecord, revokeSession, revokeTabSessions]);
 
     const ensureWriteSession = useCallback(async (projectId, directory = nativeWorkingDirectory, tabId = activeTabId) => {
         await ensureReadSession(projectId, directory, tabId);
@@ -281,23 +281,6 @@ function App() {
         });
         return response.files || [];
     }, [activeTabId, ensureReadSession, nativeWorkingDirectory]);
-
-    const getProjectDirectories = useCallback(async (projectId) => {
-        const token = await ensureReadSession(projectId, "", activeTabId);
-        const response = await sendNativeRequest({
-            action: "list_directories",
-            project_id: projectId,
-            directory: "",
-            token,
-        });
-        return response.directories || [];
-    }, [activeTabId, ensureReadSession]);
-
-    const refreshProjectWorkspace = useCallback(async (projectId, projectName, directory) => {
-        const files = await getProjectFiles(projectId, directory);
-        setNativeProjectFiles(files);
-        return files;
-    }, [getProjectFiles]);
 
     const restoreWorkspace = useCallback(async (tabId) => {
         setWorkspaceReady(false);
