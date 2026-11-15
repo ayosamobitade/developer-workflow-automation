@@ -96,7 +96,7 @@ export function extractDependencyFile(responseText) {
         end
     ).trim();
 
-    const match = markedContent.match(/^```[A-Za-z0-9_+-]*\s*\n([\\s\\S]*?)\n```\s*$/);
+    const match = markedContent.match(/^```[A-Za-z0-9_+-]*\s*\n([\s\S]*?)\n```\s*$/);
     if (!match || !match[1].trim()) {
         throw new Error("The generated dependency file is empty or incorrectly formatted.");
     }
