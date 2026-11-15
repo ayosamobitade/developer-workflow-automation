@@ -114,6 +114,46 @@ test("builds a focused assessment prompt for existing deliverables", async () =>
     assert.doesNotMatch(prompt, /TASK: create_selector/);
 });
 
+test("includes completed dependency outputs when assessing downstream implementations", async () => {
+    const selectorPath =
+        "core/website/content/selectors/content_composition_and_structure/website_content_section_selector.py";
+    const plan = {
+        deliverables: [{
+            taskId: "create_selector",
+            outputId: "selector",
+            path: selectorPath,
+            status: "existing",
+        }],
+        existingFiles: {
+            "create_selector.selector": {
+                path: selectorPath,
+                content: "class WebsiteContentSectionSelector:\\n    pass\\n",
+            },
+        },
+    };
+    const workflow = {
+        tasks: [{
+            id: "create_model",
+            outputs: [{
+                id: "model",
+                content: "class WebsiteContentSection(models.Model):\\n    title = models.CharField(max_length=100)\\n",
+                destination: { path: modelPath },
+            }],
+        }],
+    };
+
+    const prompt = buildImplementationAssessmentPrompt(
+        plan,
+        DJANGO_MODEL_WORKFLOW,
+        ["create_selector"],
+        workflow
+    );
+
+    assert.match(prompt, /DEPENDENCY SOURCE: create_model.model/);
+    assert.match(prompt, /models.CharField/);
+    assert.match(prompt, /TASK: create_selector/);
+});
+
 test("only accepts explicit COMPLETE assessments for fully existing task outputs", async () => {
     const plan = {
         deliverables: [
