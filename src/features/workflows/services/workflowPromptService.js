@@ -109,11 +109,12 @@ function formatExistingImplementations(existingFiles = {}) {
     if (!entries.length) return "";
 
     return [
-        "EXISTING IMPLEMENTATIONS TO CONTINUE",
-        "====================================",
-        "These destination files already exist in the project. Inspect them before generating outputs.",
-        "Preserve correct behavior, imports, contracts, naming and project conventions. Repair or complete existing implementations without removing working functionality.",
-        "Return complete updated files for requested outputs, not patches or abbreviated snippets.",
+        "EXISTING IMPLEMENTATIONS (READ-ONLY CONTEXT)",
+        "==============================================",
+        "These files already contain implementations and are protected project files.",
+        "Treat every existing implementation below as read-only reference context. Do not rewrite, modify, regenerate, or return any of these files.",
+        "Use their contents to understand project conventions and to build compatible missing outputs. Generate only the outputs explicitly listed under EXPECTED OUTPUTS; those destinations were missing or empty when inspected.",
+        "Return complete contents for the requested missing outputs, not patches or abbreviated snippets.",
         "",
         ...entries.flatMap(([key, file]) => [
             `EXISTING OUTPUT: ${key}`,
