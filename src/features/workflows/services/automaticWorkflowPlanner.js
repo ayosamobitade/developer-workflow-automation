@@ -1,6 +1,7 @@
 // src/features/workflows/services/automaticWorkflowPlanner.js
 
 import { isInitFilePath } from "./workflowPathUtils.js";
+import { prepareSourceContent } from "./sourcePreparationService.js";
 
 const OUTPUT_PATHS = Object.freeze({
     "create_model.model": (model) => model.modelPath,
@@ -85,6 +86,133 @@ function normalizeFiles(files) {
     }
 
     return new Set(paths);
+}
+
+
+const TASK_COMPLETENESS_RULES = Object.freeze({
+    create_model: "Confirm the model module contains the complete intended Django model implementation: appropriate model class(es), fields and relationships, constraints and metadata where required, custom methods/managers where applicable, and no unfinished placeholders.",
+    create_factory_and_model_test: "Confirm BOTH outputs are complete: a usable factory_boy DjangoModelFactory with correct model mapping and realistic field/relationship values, plus meaningful model tests covering the model's actual fields, relationships, constraints and behavior.",
+    create_selector: "Confirm the selector exposes the intended query operations for this model, uses appropriate QuerySets and filtering, handles relevant relationships efficiently, and follows the supplied project conventions.",
+    create_selector_test: "Confirm meaningful tests cover the selector's actual public query operations, filtering behavior, edge cases and relationship/query behavior.",
+    create_service: "Confirm the service implements the model's intended business operations, validates inputs, uses the project's selector and transaction/error-handling conventions where appropriate, and contains no placeholder logic.",
+    create_service_test: "Confirm meaningful tests cover the service's public operations, successful paths, validation failures, edge cases and transactional/business behavior.",
+});
+
+export function buildImplementationAssessmentPrompt(plan, definition) {
+    if (!plan || !Array.isArray(plan.deliverables) || !definition?.tasks) {
+        throw new TypeError("A valid implementation plan and workflow definition are required.");
+    }
+
+    const candidates = definition.tasks.filter((task) => {
+        const outputs = plan.deliverables.filter((item) => item.taskId === task.id);
+        return outputs.length === task.outputs.length &&
+            outputs.every((item) => item.status === "existing");
+    });
+
+    if (!candidates.length) return "";
+
+    const sections = [
+        "PROMPTFLOW EXISTING IMPLEMENTATION ASSESSMENT",
+        "============================================",
+        "Review the existing Django implementation files below and decide whether each workflow task is already COMPLETE or NEEDS_WORK.",
+        "Do not generate or rewrite code. This is an assessment only.",
+        "Be conservative: choose COMPLETE only when every output belonging to that task is genuinely production-ready, internally consistent, follows the task requirements and project conventions, and contains no TODO, FIXME, placeholder, stub, or missing core behavior.",
+        "A non-empty file, a class declaration, or superficial method names are NOT sufficient evidence of completion. Consider imports, implementation bodies, error handling, data relationships, query behavior and meaningful tests as appropriate.",
+        "If correctness is uncertain, choose NEEDS_WORK. For multi-output tasks, every output must be complete for the task to be COMPLETE.",
+        "",
+        "Return ONLY valid JSON in this exact shape:",
+        '{"tasks":{"create_model":"COMPLETE","create_factory_and_model_test":"NEEDS_WORK","create_selector":"COMPLETE","create_selector_test":"NEEDS_WORK","create_service":"NEEDS_WORK","create_service_test":"NEEDS_WORK"}}',
+        "Include every task ID shown below. Use only COMPLETE or NEEDS_WORK as values.",
+    ];
+
+    for (const task of candidates) {
+        sections.push(
+            [
+                "",
+                `TASK: ${task.id}`,
+                `Requirements: ${task.instruction}`,
+                `Completeness criteria: ${TASK_COMPLETENESS_RULES[task.id] || "Confirm every required output is complete and production-ready."}`,
+                ...task.outputs.flatMap((output) => {
+                    const key = `${task.id}.${output.id}`;
+                    const file = plan.existingFiles[key];
+                    const compacted = prepareSourceContent({
+                        content: file.content,
+                        path: file.path,
+                        mode: "compact",
+                    }).content;
+                    return [
+                        "",
+                        `OUTPUT: ${key}`,
+                        `PATH: ${file.path}`,
+                        "\x60\x60\x60python",
+                        compacted,
+                        "\x60\x60\x60",
+                    ];
+                }),
+            ].join("\n")
+        );
+    }
+
+    return sections.join("\n");
+}
+
+export function parseImplementationAssessment(response, plan, definition) {
+    const text = typeof response === "string"
+        ? response
+        : response?.response?.text;
+
+    const statuses = Object.fromEntries(
+        (definition?.tasks || []).map((task) => [task.id, "NEEDS_WORK"])
+    );
+
+    if (typeof text !== "string" || !text.trim()) {
+        return statuses;
+    }
+
+    let parsed;
+    const trimmed = text.trim()
+        .replace(/^\x60{3}(?:json)?\s*/i, "")
+        .replace(/\s*\x60{3}$/, "");
+    try {
+        parsed = JSON.parse(trimmed);
+    } catch {
+        const start = trimmed.indexOf("{");
+        const end = trimmed.lastIndexOf("}");
+        if (start < 0 || end <= start) return statuses;
+        try {
+            parsed = JSON.parse(trimmed.slice(start, end + 1));
+        } catch {
+            return statuses;
+        }
+    }
+
+    const supplied = parsed?.tasks;
+    if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) {
+        return statuses;
+    }
+
+    const eligible = new Set(
+        (plan?.deliverables || [])
+            .filter((item) => item.status === "existing")
+            .map((item) => item.taskId)
+    );
+
+    for (const taskId of Object.keys(statuses)) {
+        const value = supplied[taskId];
+        if (eligible.has(taskId) && value === "COMPLETE") {
+            const outputs = plan.deliverables.filter((item) => item.taskId === taskId);
+            const taskDefinition = definition.tasks.find((item) => item.id === taskId);
+            if (
+                taskDefinition &&
+                outputs.length === taskDefinition.outputs.length &&
+                outputs.every((item) => item.status === "existing")
+            ) {
+                statuses[taskId] = "COMPLETE";
+            }
+        }
+    }
+
+    return statuses;
 }
 
 /**
