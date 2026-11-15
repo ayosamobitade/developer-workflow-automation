@@ -67,9 +67,24 @@ function normalizeFiles(files) {
         throw new TypeError("The native project file list must be an array.");
     }
 
-    return new Set(files.map((file) => normalizePath(
-        typeof file === "string" ? file : file?.path
-    )));
+    const paths = [];
+
+    for (const file of files) {
+        const rawPath = typeof file === "string" ? file : file?.path;
+        const candidate = String(rawPath || "")
+            .trim()
+            .replace(/\\/g, "/")
+            .replace(/^\/+|\/+$/g, "")
+            .replace(/\/+/g, "/");
+
+        // Native project listings include package __init__.py files.
+        // They are irrelevant to model deliverable discovery.
+        if (!candidate || isInitFilePath(candidate)) continue;
+
+        paths.push(normalizePath(candidate));
+    }
+
+    return new Set(paths);
 }
 
 /**
