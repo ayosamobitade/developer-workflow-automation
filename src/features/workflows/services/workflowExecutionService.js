@@ -1194,7 +1194,7 @@ export function createWorkflowExecutionController({
                     `Only output ID: ${output.id}`,
                     `Only destination path: ${dependencyPath}`,
                     "Use the normal task instruction and supplied source files for this one output. Return it using the exact output markers supplied in EXPECTED OUTPUTS.",
-                ].join("\\n"),
+                ].join("\n"),
                 definition: dependencyDefinition,
             });
 
