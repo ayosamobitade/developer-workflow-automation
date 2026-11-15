@@ -289,8 +289,11 @@ function App() {
         const key = `${WORKSPACE_STORAGE_PREFIX}${tabId}`;
         const saved = await browser.storage.local.get(key);
         const workspace = saved[key];
+        const projectId = workspace?.nativeProjectId || workspace?.projectId;
+        const projectName = workspace?.nativeProjectName || workspace?.projectName || "";
+        const workingDirectory = workspace?.nativeWorkingDirectory || workspace?.workingDirectory || "";
 
-        if (!(workspace?.nativeProjectId || workspace?.projectId)) {
+        if (!projectId) {
             setNativeProjectId("");
             setNativeProjectName("");
             setNativeWorkingDirectory("");
@@ -300,42 +303,42 @@ function App() {
             return;
         }
 
-        setNativeProjectId(workspace.nativeProjectId || workspace.projectId);
-        setNativeProjectName(workspace.nativeProjectName || workspace.projectName || "");
-        setNativeWorkingDirectory(workspace.nativeWorkingDirectory || workspace.workingDirectory || "");
+        setNativeProjectId(projectId);
+        setNativeProjectName(projectName);
+        setNativeWorkingDirectory(workingDirectory);
 
         try {
-            const rootToken = await ensureReadSession(workspace.nativeProjectId || workspace.projectId, "", tabId);
+            const rootToken = await ensureReadSession(projectId, "", tabId);
             const [allFilesResponse, directoryResponse] = await Promise.all([
                 sendNativeRequest({
                     action: "list_files",
-                    project_id: workspace.nativeProjectId || workspace.projectId,
+                    project_id: projectId,
                     directory: "",
                     token: rootToken,
                 }),
                 sendNativeRequest({
                     action: "list_directories",
-                    project_id: workspace.projectId,
+                    project_id: projectId,
                     directory: "",
                     token: rootToken,
                 }),
             ]);
             const scopedToken = await ensureReadSession(
-                workspace.projectId,
-                workspace.nativeWorkingDirectory || workspace.workingDirectory || "",
+                projectId,
+                workingDirectory,
                 tabId
             );
             const scopedResponse = await sendNativeRequest({
                 action: "list_files",
-                project_id: workspace.projectId,
-                directory: workspace.workingDirectory || "",
+                project_id: projectId,
+                directory: workingDirectory,
                 token: scopedToken,
             });
             setNativeProjectFiles(scopedResponse.files || []);
             setNativeProjectDirectories(directoryResponse.directories || []);
             setNativeConnected(true);
             setNativeVersion("");
-            setNotice(`${workspace.nativeProjectName || workspace.projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
+            setNotice(`${projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
         } catch (restoreError) {
             await revokeTabSessions(tabId);
             setNativeProjectId("");
