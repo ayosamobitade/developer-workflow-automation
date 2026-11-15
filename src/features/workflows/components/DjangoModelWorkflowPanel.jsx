@@ -530,6 +530,8 @@ export default function DjangoModelWorkflowPanel({
 
                         if (activeBatchRun) {
                             executionContextRef.current = {
+                                runType: "batch",
+                                batchId: savedBatch.id,
                                 tabId: activeTabId,
                                 projectId: savedBatch.project?.id,
                                 workingDirectory: savedBatch.workingDirectory || "",
@@ -761,6 +763,21 @@ export default function DjangoModelWorkflowPanel({
 
         stopRequestedRef.current = true;
         setIsStopping(true);
+
+        const stopMessage = execution.runType === "batch"
+            ? {
+                type: "PROMPTFLOW_BACKGROUND_BATCH_STOP",
+                workflowTabId: execution.tabId,
+                batchId: execution.batchId,
+            }
+            : {
+                type: "PROMPTFLOW_BACKGROUND_WORKFLOW_STOP",
+                workflowTabId: execution.tabId,
+            };
+
+        browser.runtime.sendMessage(stopMessage).catch(() => {
+            // The background run may already have completed.
+        });
 
         if (destinationResolverRef.current) {
             destinationResolverRef.current(null);
@@ -1147,6 +1164,7 @@ async function executeWorkflow(initialWorkflow) {
         stopRequestedRef.current = false;
 
         executionContextRef.current = {
+            runType: "workflow",
             tabId: runTabId,
             projectId: runProjectId,
             workingDirectory: runWorkingDirectory,
@@ -1604,6 +1622,8 @@ async function executeWorkflow(initialWorkflow) {
 
             stopRequestedRef.current = false;
             executionContextRef.current = {
+                runType: "batch",
+                batchId: batch.id,
                 tabId: activeTabId,
                 projectId: nativeProjectId,
                 workingDirectory: nativeWorkingDirectory || "",
