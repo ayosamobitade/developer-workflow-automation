@@ -1368,7 +1368,7 @@ export function createWorkflowExecutionController({
                 // 2. Generate the prompt and automatically reduce temporary
                 // Python source context if it exceeds the conservative budget.
                 const existingFilesForTask = Object.fromEntries(
-                    (taskDefinition.outputs || [])
+                    (fullTaskDefinition.outputs || [])
                         .map((output) => {
                             const key = `${taskId}.${output.id}`;
                             const existing = workflow.input?.existingFiles?.[key];
