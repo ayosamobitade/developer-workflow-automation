@@ -104,6 +104,29 @@ function formatSourceFiles(task, sourceContents, sourcePaths = {}) {
 }
 
 
+function formatExistingImplementations(existingFiles = {}) {
+    const entries = Object.entries(existingFiles);
+    if (!entries.length) return "";
+
+    return [
+        "EXISTING IMPLEMENTATIONS TO CONTINUE",
+        "====================================",
+        "These destination files already exist in the project. Inspect them before generating outputs.",
+        "Preserve correct behavior, imports, contracts, naming and project conventions. Repair or complete existing implementations without removing working functionality.",
+        "Return complete updated files for requested outputs, not patches or abbreviated snippets.",
+        "",
+        ...entries.flatMap(([key, file]) => [
+            `EXISTING OUTPUT: ${key}`,
+            `Existing path: ${file.path}`,
+            "```python",
+            file.content,
+            "```",
+            "",
+        ]),
+    ].join("\n");
+}
+
+
 function formatExpectedOutputs(task, destinationHints = {}) {
     return task.outputs.map((output, index) => {
         const destination =
@@ -227,6 +250,7 @@ export function generateWorkflowPrompt({
     sourceContents = {},
     sourcePaths = {},
     destinationHints = {},
+    existingFiles = {},
     additionalInstructions = "",
     definition = DJANGO_MODEL_WORKFLOW,
 }) {
@@ -304,6 +328,8 @@ export function generateWorkflowPrompt({
                 sourcePaths
             ),
         ].join("\n"),
+
+        formatExistingImplementations(existingFiles),
 
         [
             "EXPECTED OUTPUTS",
