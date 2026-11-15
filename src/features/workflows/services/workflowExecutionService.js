@@ -1188,6 +1188,8 @@ export function createWorkflowExecutionController({
                 },
                 additionalInstructions: [
                     "DEPENDENCY SUBTASK SCOPE",
+                    request.reason ? `Why this dependency is required: ${request.reason}` : "",
+                    request.requiredFor ? `Used by: ${request.requiredFor}` : "",
                     "Generate ONLY the single requested dependency output listed below. The normal task instruction may describe other outputs; do not generate, modify, or return any of those other outputs during this dependency subtask.",
                     `Only output ID: ${output.id}`,
                     `Only destination path: ${dependencyPath}`,
