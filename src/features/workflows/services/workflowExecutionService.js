@@ -864,12 +864,26 @@ export function createWorkflowExecutionController({
                         sourceModes: compactedSourceModes,
                     });
 
+                    const compactedExistingFiles = Object.fromEntries(
+                        Object.entries(existingFilesForTask).map(([key, file]) => [
+                            key,
+                            {
+                                ...file,
+                                content: prepareSourceContent({
+                                    content: file.content,
+                                    path: file.path,
+                                    mode: "compact",
+                                }).content,
+                            },
+                        ])
+                    );
+
                     const compactedPrompt = generateWorkflowPrompt({
                         workflow,
                         taskId,
                         sourceContents: compactedSources.sourceContents,
                         sourcePaths: compactedSources.sourcePaths,
-                        existingFiles: existingFilesForTask,
+                        existingFiles: compactedExistingFiles,
                         additionalInstructions,
                         definition,
                     });
