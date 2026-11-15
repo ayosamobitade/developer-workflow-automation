@@ -648,6 +648,12 @@ async function runBatch(message) {
                 path,
             }),
 
+            listFiles: () => listProjectFiles({
+                projectId,
+                workingDirectory,
+                readToken,
+            }),
+
             runModel: async ({
                 workflow,
                 preparationMode,
