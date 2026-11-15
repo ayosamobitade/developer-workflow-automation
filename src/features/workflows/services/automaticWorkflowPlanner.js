@@ -1,7 +1,7 @@
 // src/features/workflows/services/automaticWorkflowPlanner.js
 
 import { isInitFilePath } from "./workflowPathUtils.js";
-import { prepareSourceContent } from "./sourcePreparationService.js";
+import { compactPythonWhitespace } from "./sourcePreparationService.js";
 
 const OUTPUT_PATHS = Object.freeze({
     "create_model.model": (model) => model.modelPath,
@@ -137,11 +137,9 @@ export function buildImplementationAssessmentPrompt(plan, definition, taskIds = 
                 ...task.outputs.flatMap((output) => {
                     const key = `${task.id}.${output.id}`;
                     const file = plan.existingFiles[key];
-                    const compacted = prepareSourceContent({
-                        content: file.content,
-                        path: file.path,
-                        mode: "compact",
-                    }).content;
+                    // Preserve comments, TODO/FIXME markers and test bodies
+                    // during assessment; compact whitespace only.
+                    const compacted = compactPythonWhitespace(file.content);
                     return [
                         "",
                         `OUTPUT: ${key}`,
