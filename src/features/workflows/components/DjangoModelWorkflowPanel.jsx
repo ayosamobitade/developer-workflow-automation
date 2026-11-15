@@ -64,13 +64,7 @@ const SOURCE_PREPARATION_MODES = [
     },
 ];
 
-const MODEL_SOURCE_MODES = [
-    { value: "create", label: "Create a new model" },
-    {
-        value: "existing",
-        label: "Continue from an existing model",
-    },
-];
+
 
 
 function getDestinationEntries(destinations, taskId) {
