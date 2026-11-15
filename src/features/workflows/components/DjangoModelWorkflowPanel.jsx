@@ -2234,10 +2234,10 @@ async function executeWorkflow(initialWorkflow) {
                             Each selected model is inspected automatically. Existing implementations are continued; missing or empty files are generated.
                         </div>
 
-                        {!batch || [
-                            BATCH_STATUS.COMPLETED,
-                            BATCH_STATUS.STOPPED,
-                        ].includes(batch.status) ? (
+                        {(!batch || ![
+                            BATCH_STATUS.RUNNING,
+                            BATCH_STATUS.PAUSED,
+                        ].includes(batch.status)) && (
 
                             <button
                                 type="button"
@@ -2251,10 +2251,10 @@ async function executeWorkflow(initialWorkflow) {
                                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                             >
                                 <Save size={16} />
-                                Create Batch
+                                {batch ? "Update Execution List" : "Create Batch"}
                             </button>
 
-                        ) : null}
+                        )}
 
                     </div>
 
