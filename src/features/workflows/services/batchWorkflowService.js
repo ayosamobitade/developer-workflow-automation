@@ -221,15 +221,14 @@ function extractFileContent(response, path) {
             ? response
             : response?.content;
 
-    if (
-        typeof content !== "string" ||
-        !content.trim()
-    ) {
+    if (typeof content !== "string") {
         throw new Error(
-            `Existing model file "${path}" is empty or could not be read.`
+            `Existing model file "${path}" could not be read.`
         );
     }
 
+    // An empty placeholder is readable, but it is not a completed model.
+    // The caller decides whether to seed or generate the model task.
     return content;
 }
 
@@ -617,6 +616,13 @@ async function seedExistingModel({
         response,
         model.path
     );
+
+    // Empty placeholder files must not be marked as completed model outputs.
+    // Leave create_model pending so ChatGPT can generate the implementation;
+    // the normal write path can safely populate the existing empty file.
+    if (!content.trim()) {
+        return workflow;
+    }
 
     const taskDefinition = getModelTaskDefinition(definition);
     const outputDefinition = taskDefinition.outputs[0];
