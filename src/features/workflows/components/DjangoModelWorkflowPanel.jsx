@@ -1177,6 +1177,14 @@ async function executeWorkflow(initialWorkflow) {
     }
 }
 
+    function emitImplementationPlanNotice(plan) {
+        const { missing, empty, existing } = plan.summary;
+        setNotice(
+            `Project inspected: ${existing} existing implementation(s), ${empty} empty file(s), and ${missing} missing file(s). PromptFlow will continue from the detected project state.`
+        );
+    }
+
+
     // ---------------------------------------------------------
     // START SINGLE WORKFLOW
     // ---------------------------------------------------------
