@@ -1040,6 +1040,13 @@ export function createWorkflowExecutionController({
                 destinationHints: {
                     [output.id]: dependencyPath,
                 },
+                additionalInstructions: [
+                    "DEPENDENCY SUBTASK SCOPE",
+                    "Generate ONLY the single requested dependency output listed below. The normal task instruction may describe other outputs; do not generate, modify, or return any of those other outputs during this dependency subtask.",
+                    `Only output ID: ${output.id}`,
+                    `Only destination path: ${dependencyPath}`,
+                    "Use the normal task instruction and supplied source files for this one output. Return it using the exact output markers supplied in EXPECTED OUTPUTS.",
+                ].join("\\n"),
                 definition: dependencyDefinition,
             });
 
