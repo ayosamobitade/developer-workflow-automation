@@ -6,12 +6,6 @@ import {
 
 import {
     createWorkflowInstance,
-    startWorkflowTask,
-    storeWorkflowOutput,
-    validateWorkflowOutput,
-    assignWorkflowOutputDestination,
-    markWorkflowOutputWritten,
-    completeWorkflowTask,
     retryWorkflowTask,
     WORKFLOW_TASK_STATUS,
 } from "./workflowService.js";
@@ -31,6 +25,10 @@ import {
 import {
     isInitFilePath,
 } from "./workflowPathUtils.js";
+
+import {
+    planAutomaticWorkflow,
+} from "./automaticWorkflowPlanner.js";
 
 
 const activeBatches = new Map();
@@ -380,67 +378,6 @@ function createModelWorkflow(batch, model) {
 }
 
 
-/**
- * Seed create_model as completed using the normal workflow lifecycle.
- *
- * This is used only when the user chooses "Continue from existing model".
- * No project file is written or modified here.
- */
-async function seedExistingModel({
-    workflow,
-    modelPath,
-    readFile,
-}) {
-    const response = await readFile(modelPath);
-
-    if (
-        !response ||
-        typeof response.content !== "string" ||
-        !response.content.trim()
-    ) {
-        throw new Error(
-            `The existing model "${modelPath}" could not be read or is empty.`
-        );
-    }
-
-    let next = startWorkflowTask(
-        workflow,
-        "create_model",
-        DJANGO_MODEL_WORKFLOW
-    );
-
-    next = storeWorkflowOutput(next, {
-        taskId: "create_model",
-        outputId: "model",
-        content: response.content,
-    });
-
-    next = validateWorkflowOutput(next, {
-        taskId: "create_model",
-        outputId: "model",
-    });
-
-    next = assignWorkflowOutputDestination(next, {
-        taskId: "create_model",
-        outputId: "model",
-        path: modelPath,
-        confirmed: true,
-    });
-
-    next = markWorkflowOutputWritten(next, {
-        taskId: "create_model",
-        outputId: "model",
-    });
-
-    next = completeWorkflowTask(
-        next,
-        "create_model"
-    );
-
-    return next;
-}
-
-
 function getNextModelIndex(batch) {
     return batch.models.findIndex(
         (model, index) =>
@@ -710,23 +647,31 @@ export async function runWorkflowBatch({
                     ? structuredClone(model.workflow)
                     : createModelWorkflow(batch, model);
 
-                if (!model.workflow && model.mode === "existing") {
-                    workflow = await seedExistingModel({
-                        workflow,
+                if (!model.workflow) {
+                    const plan = await planAutomaticWorkflow({
                         modelPath: model.path,
+                        listFiles,
                         readFile,
                     });
 
-                    model.workflow = structuredClone(workflow);
+                    workflow.input.existingFiles = plan.existingFiles;
+                    workflow.input.implementationPlan = plan;
+                    workflow.input.automaticContinuation = true;
 
+                    // Existing model content remains an input to create_model.
+                    // The task decides whether it needs completion or can be preserved.
+
+                    model.workflow = structuredClone(workflow);
                     await persistBatch(
                         normalizedTabId,
                         batch,
                         onBatchChange
                     );
 
-                    emit("existing_model_loaded", {
+                    emit("implementation_plan_created", {
                         modelPath: model.path,
+                        summary: plan.summary,
+                        deliverables: plan.deliverables,
                     });
                 }
 

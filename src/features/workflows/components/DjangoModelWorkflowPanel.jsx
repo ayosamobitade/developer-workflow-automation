@@ -19,12 +19,6 @@ import {
     createWorkflowInstance,
     getWorkflowProgress,
     retryWorkflowTask,
-    startWorkflowTask,
-    storeWorkflowOutput,
-    validateWorkflowOutput,
-    assignWorkflowOutputDestination,
-    markWorkflowOutputWritten,
-    completeWorkflowTask,
 } from "../services/workflowService.js";
 
 import {
@@ -36,6 +30,10 @@ import {
 } from "../services/workflowPathUtils.js";
 
 import {
+    planAutomaticWorkflow,
+} from "../services/automaticWorkflowPlanner.js";
+
+import {
     getWorkflowState,
     saveWorkflowState,
 } from "../storage/workflowStorage.js";
@@ -43,6 +41,8 @@ import {
 import {
     discoverDjangoModelFiles,
     createWorkflowBatch,
+    updateWorkflowBatchSelection,
+    clearWorkflowBatchSelection,
     retryBatchModel,
     skipBatchModel,
     getBatchProgress,
@@ -66,13 +66,7 @@ const SOURCE_PREPARATION_MODES = [
     },
 ];
 
-const MODEL_SOURCE_MODES = [
-    { value: "create", label: "Create a new model" },
-    {
-        value: "existing",
-        label: "Continue from an existing model",
-    },
-];
+
 
 
 function getDestinationEntries(destinations, taskId) {
@@ -217,7 +211,6 @@ export default function DjangoModelWorkflowPanel({
     const [modelPath, setModelPath] = useState("");
 
     const [sourceMode, setSourceMode] = useState("full");
-    const [modelSourceMode, setModelSourceMode] = useState("create");
 
     // These are deliberately separate:
     // executionMode: single | batch
@@ -225,8 +218,6 @@ export default function DjangoModelWorkflowPanel({
     const [executionMode, setExecutionMode] = useState("single");
     const [batchMode, setBatchMode] = useState(BATCH_MODE.MANUAL);
 
-    const [batchModelSourceMode, setBatchModelSourceMode] =
-        useState("existing");
 
     const [discoveredModels, setDiscoveredModels] = useState([]);
     const [selectedModels, setSelectedModels] = useState([]);
@@ -514,6 +505,9 @@ export default function DjangoModelWorkflowPanel({
                     null;
 
                 setBatch(savedBatch);
+                if (savedBatch?.models?.length) {
+                    setSelectedModels(savedBatch.models.map((model) => model.path));
+                }
 
                 if (savedBatch?.id) {
                     try {
@@ -580,16 +574,6 @@ export default function DjangoModelWorkflowPanel({
                         setBatchMode(BATCH_MODE.MANUAL);
                     }
 
-                    const currentModel =
-                        savedBatch.models?.[
-                            savedBatch.currentIndex
-                        ];
-
-                    if (currentModel?.modelSource) {
-                        setBatchModelSourceMode(
-                            currentModel.modelSource
-                        );
-                    }
                 }
 
             } catch (err) {
@@ -636,6 +620,52 @@ export default function DjangoModelWorkflowPanel({
         );
     }, [nativeProjectFiles]);
 
+
+    // Keep the saved, not-yet-started execution list synchronized with
+    // the checkboxes. Deselecting a model removes it from the actual batch.
+    useEffect(() => {
+        if (!batch || batch.status !== BATCH_STATUS.READY || isRunning) {
+            return;
+        }
+
+        const currentPaths = batch.models.map((model) => model.path);
+        const sameSelection =
+            currentPaths.length === selectedModels.length &&
+            currentPaths.every((path, index) => path === selectedModels[index]);
+
+        if (sameSelection) return;
+
+        let cancelled = false;
+
+        async function synchronizeSelection() {
+            try {
+                if (!selectedModels.length) {
+                    await clearWorkflowBatchSelection(activeTabId, batch.id);
+                    if (!cancelled) setBatch(null);
+                    return;
+                }
+
+                const updated = await updateWorkflowBatchSelection({
+                    tabId: activeTabId,
+                    batchId: batch.id,
+                    models: selectedModels,
+                    sourceMode,
+                });
+
+                if (!cancelled) setBatch(updated);
+            } catch (err) {
+                if (!cancelled) {
+                    setError(err.message || "Unable to update the model execution list.");
+                }
+            }
+        }
+
+        synchronizeSelection();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedModels, batch?.id, batch?.status, isRunning, activeTabId, sourceMode]);
 
     function handleSelectAllModels() {
         setSelectedModels([...discoveredModels]);
@@ -1192,95 +1222,11 @@ async function executeWorkflow(initialWorkflow) {
     }
 }
 
-    // ---------------------------------------------------------
-    // SEED AN EXISTING MODEL FOR SINGLE-MODE EXECUTION
-    // ---------------------------------------------------------
-
-    async function seedExistingModelWorkflow(
-        initialWorkflow,
-        path
-    ) {
-        const response = await readNativeProjectFile(
-            nativeProjectId,
-            path,
-            nativeWorkingDirectory || ""
+    function emitImplementationPlanNotice(plan) {
+        const { missing, empty, existing } = plan.summary;
+        setNotice(
+            `Project inspected: ${existing} existing implementation(s), ${empty} empty file(s), and ${missing} missing file(s). PromptFlow will continue from the detected project state.`
         );
-
-        const content =
-            typeof response === "string"
-                ? response
-                : response?.content;
-
-        if (
-            typeof content !== "string" ||
-            !content.trim()
-        ) {
-            throw new Error(
-                `The existing model "${path}" is empty or could not be read.`
-            );
-        }
-
-        const taskDefinition =
-            DJANGO_MODEL_WORKFLOW.tasks.find(
-                (task) => task.id === "create_model"
-            );
-
-        const outputDefinition =
-            taskDefinition?.outputs?.[0];
-
-        if (!outputDefinition) {
-            throw new Error(
-                'The "create_model" task has no model output definition.'
-            );
-        }
-
-        let nextWorkflow = startWorkflowTask(
-            initialWorkflow,
-            "create_model",
-            DJANGO_MODEL_WORKFLOW
-        );
-
-        nextWorkflow = storeWorkflowOutput(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-                content,
-            }
-        );
-
-        nextWorkflow = validateWorkflowOutput(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-            }
-        );
-
-        nextWorkflow = assignWorkflowOutputDestination(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-                path,
-                confirmed: true,
-            }
-        );
-
-        nextWorkflow = markWorkflowOutputWritten(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-            }
-        );
-
-        nextWorkflow = completeWorkflowTask(
-            nextWorkflow,
-            "create_model"
-        );
-
-        return nextWorkflow;
     }
 
 
@@ -1339,12 +1285,31 @@ async function executeWorkflow(initialWorkflow) {
             newWorkflow.input.workingDirectory =
                 nativeWorkingDirectory || "";
 
-            if (modelSourceMode === "existing") {
-                newWorkflow = await seedExistingModelWorkflow(
-                    newWorkflow,
-                    modelPath.trim()
-                );
-            }
+            const implementationPlan = await planAutomaticWorkflow({
+                modelPath: modelPath.trim(),
+                listFiles: () => getNativeProjectFiles(
+                    nativeProjectId,
+                    nativeWorkingDirectory || ""
+                ),
+                readFile: (path) => readNativeProjectFile(
+                    nativeProjectId,
+                    path,
+                    nativeWorkingDirectory || ""
+                ),
+            });
+
+            newWorkflow.input.existingFiles =
+                implementationPlan.existingFiles;
+            newWorkflow.input.implementationPlan =
+                implementationPlan;
+            newWorkflow.input.automaticContinuation = true;
+
+            // Existing model contents are passed to create_model for assessment
+            // and continuation; a non-empty file is not assumed complete.
+
+            emitImplementationPlanNotice(
+                implementationPlan
+            );
 
             await saveWorkflowState(
                 activeTabId,
@@ -1353,12 +1318,6 @@ async function executeWorkflow(initialWorkflow) {
 
             setWorkflow(newWorkflow);
             setEvents([]);
-
-            setNotice(
-                modelSourceMode === "existing"
-                    ? "Existing model loaded. Continuing with the remaining workflow tasks."
-                    : "New Django model workflow created."
-            );
 
             await executeWorkflow(newWorkflow);
 
@@ -1513,7 +1472,12 @@ async function executeWorkflow(initialWorkflow) {
             return;
         }
 
-        if (batch && [
+        const canUpdateCurrentBatch =
+            batch?.status === BATCH_STATUS.READY &&
+            batch.project?.id === nativeProjectId &&
+            (batch.workingDirectory || "") === (nativeWorkingDirectory || "");
+
+        if (batch && !canUpdateCurrentBatch && [
             BATCH_STATUS.READY,
             BATCH_STATUS.RUNNING,
             BATCH_STATUS.PAUSED,
@@ -1530,23 +1494,22 @@ async function executeWorkflow(initialWorkflow) {
         setNotice("");
 
         try {
-            const newBatch = await createWorkflowBatch({
-                tabId: activeTabId,
-                projectId: nativeProjectId,
-                projectName: nativeProjectName,
-                workingDirectory: nativeWorkingDirectory || "",
-                projectTree: treeText,
-
-                // Manual/automatic is independent of single/batch UI.
-                mode: batchMode,
-
-                // Keep model source separate from source preparation.
-                models: selectedModels.map((path) => ({
-                    path,
-                    modelSource: batchModelSourceMode,
+            const newBatch = canUpdateCurrentBatch
+                ? await updateWorkflowBatchSelection({
+                    tabId: activeTabId,
+                    batchId: batch.id,
+                    models: selectedModels,
                     sourceMode,
-                })),
-            });
+                })
+                : await createWorkflowBatch({
+                    tabId: activeTabId,
+                    projectId: nativeProjectId,
+                    projectName: nativeProjectName,
+                    workingDirectory: nativeWorkingDirectory || "",
+                    projectTree: treeText,
+                    mode: batchMode,
+                    models: selectedModels,
+                });
 
             setBatch(newBatch);
             setWorkflow(null);
@@ -1555,7 +1518,7 @@ async function executeWorkflow(initialWorkflow) {
             setExecutionMode("batch");
 
             setNotice(
-                `${newBatch.models.length} model(s) added to the batch.`
+                `${newBatch.models.length} model(s) in the execution list.`
             );
 
         } catch (err) {
@@ -1944,37 +1907,8 @@ async function executeWorkflow(initialWorkflow) {
             {executionMode === "single" && (
 
                 <>
-                    <div className="mb-3">
-
-                        <label className="mb-1 block text-xs font-semibold">
-                            Model source
-                        </label>
-
-                        <select
-                            value={modelSourceMode}
-                            onChange={(event) =>
-                                setModelSourceMode(event.target.value)
-                            }
-                            disabled={isRunning}
-                            className="w-full rounded-lg border p-3 text-xs outline-none focus:border-indigo-500 disabled:bg-slate-50"
-                        >
-                            {MODEL_SOURCE_MODES.map((mode) => (
-                                <option
-                                    key={mode.value}
-                                    value={mode.value}
-                                >
-                                    {mode.label}
-                                </option>
-                            ))}
-                        </select>
-
-                        <p className="mt-1 text-xs text-slate-500">
-                            Existing mode reads the model file and
-                            continues with the factory, tests,
-                            selector and service tasks without
-                            regenerating the model.
-                        </p>
-
+                    <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-800">
+                        PromptFlow automatically inspects the selected model, factory, tests, selector and service files. It creates missing files and continues existing implementations with backup protection.
                     </div>
 
                     <div className="mb-4">
@@ -2355,42 +2289,14 @@ async function executeWorkflow(initialWorkflow) {
 
                         </div>
 
-                        <div>
-
-                            <label className="mb-1 block text-xs font-medium">
-                                Selected model source
-                            </label>
-
-                            <select
-                                value={batchModelSourceMode}
-                                onChange={(event) =>
-                                    setBatchModelSourceMode(
-                                        event.target.value
-                                    )
-                                }
-                                disabled={!canConfigureBatch}
-                                className="w-full rounded-lg border p-3 text-xs disabled:bg-slate-50"
-                            >
-                                <option value="existing">
-                                    Continue from existing models
-                                </option>
-
-                                <option value="create">
-                                    Create models from scratch
-                                </option>
-                            </select>
-
-                            <p className="mt-1 text-xs text-slate-500">
-                                Existing mode reads each selected model
-                                and skips its model-generation task.
-                            </p>
-
+                        <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-800">
+                            Each selected model is inspected automatically. Existing implementations are continued; missing or empty files are generated.
                         </div>
 
-                        {!batch || [
-                            BATCH_STATUS.COMPLETED,
-                            BATCH_STATUS.STOPPED,
-                        ].includes(batch.status) ? (
+                        {(!batch || ![
+                            BATCH_STATUS.RUNNING,
+                            BATCH_STATUS.PAUSED,
+                        ].includes(batch.status)) && (
 
                             <button
                                 type="button"
@@ -2404,10 +2310,10 @@ async function executeWorkflow(initialWorkflow) {
                                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                             >
                                 <Save size={16} />
-                                Create Batch
+                                {batch ? "Update Execution List" : "Create Batch"}
                             </button>
 
-                        ) : null}
+                        )}
 
                     </div>
 
@@ -2509,9 +2415,7 @@ async function executeWorkflow(initialWorkflow) {
                                                     </span>
 
                                                     <span className="text-xs text-slate-400">
-                                                        {model.modelSource === "existing"
-                                                            ? "Existing model"
-                                                            : "New model"}
+                                                        Automatic project detection
                                                     </span>
 
                                                 </div>

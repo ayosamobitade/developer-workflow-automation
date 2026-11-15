@@ -27,6 +27,11 @@ import {
 } from "./sourcePreparationService.js";
 
 import {
+    buildImplementationAssessmentPrompt,
+    parseImplementationAssessment,
+} from "./automaticWorkflowPlanner.js";
+
+import {
     extractWorkflowOutputs,
 } from "./workflowOutputService.js";
 
@@ -491,6 +496,168 @@ export function createWorkflowExecutionController({
     }
 
 
+    async function assessExistingTask({
+        tabId,
+        workflow,
+        taskId,
+    }) {
+        const plan = workflow.input?.implementationPlan;
+        const taskDefinition = getTaskDefinition(definition, taskId);
+        const deliverables = plan?.deliverables?.filter(
+            (item) => item.taskId === taskId
+        ) || [];
+
+        if (
+            !plan ||
+            deliverables.length !== taskDefinition.outputs.length ||
+            deliverables.some((item) => item.status !== "existing")
+        ) {
+            return { workflow, status: "NEEDS_WORK" };
+        }
+
+        const savedAssessment =
+            workflow.input?.implementationAssessments?.[taskId];
+
+        if (savedAssessment) {
+            return { workflow, status: savedAssessment };
+        }
+
+        const prompt = buildImplementationAssessmentPrompt(
+            plan,
+            definition,
+            [taskId],
+            workflow
+        );
+
+        if (!prompt) {
+            return { workflow, status: "NEEDS_WORK" };
+        }
+
+        let status = "NEEDS_WORK";
+        const estimatedTokens = estimatePromptTokens(prompt);
+
+        if (estimatedTokens <= MAX_PROMPT_TOKENS) {
+            emit("implementation_assessment_started", {
+                taskId,
+                estimatedTokens,
+            });
+
+            const response = await sendPrompt(prompt);
+            assertNotStopped(shouldStop);
+
+            status = parseImplementationAssessment(
+                response,
+                plan,
+                definition
+            )[taskId] || "NEEDS_WORK";
+        } else {
+            emit("implementation_assessment_skipped", {
+                taskId,
+                estimatedTokens,
+                reason: "assessment_prompt_exceeds_budget",
+            });
+        }
+
+        // Re-read every candidate before accepting COMPLETE. If a file changed
+        // after inspection, refresh the prompt context and run the task normally.
+        if (status === "COMPLETE") {
+            for (const output of taskDefinition.outputs) {
+                const key = `${taskId}.${output.id}`;
+                const snapshot = workflow.input.existingFiles?.[key];
+                const current = snapshot
+                    ? await readFile(snapshot.path)
+                    : null;
+
+                if (
+                    !snapshot ||
+                    !current ||
+                    typeof current.content !== "string" ||
+                    current.content !== snapshot.content
+                ) {
+                    status = "NEEDS_WORK";
+
+                    if (current && typeof current.content === "string" && current.content.trim()) {
+                        const refreshed = {
+                            path: snapshot?.path || plan.deliverables.find(
+                                (item) => item.taskId === taskId && item.outputId === output.id
+                            )?.path,
+                            content: current.content,
+                        };
+                        workflow.input.existingFiles[key] = refreshed;
+                        plan.existingFiles[key] = refreshed;
+                    } else {
+                        delete workflow.input.existingFiles[key];
+                        delete plan.existingFiles[key];
+                    }
+                }
+            }
+        }
+
+        workflow.input.implementationAssessments ||= {};
+        workflow.input.implementationAssessments[taskId] = status;
+        await persist(tabId, workflow);
+
+        emit("implementation_assessment_completed", {
+            taskId,
+            status,
+        });
+
+        return { workflow, status };
+    }
+
+
+    async function seedAssessedTask({
+        tabId,
+        workflow,
+        taskId,
+    }) {
+        const taskDefinition = getTaskDefinition(definition, taskId);
+        workflow = startWorkflowTask(workflow, taskId);
+
+        for (const output of taskDefinition.outputs) {
+            const key = `${taskId}.${output.id}`;
+            const existing = workflow.input.existingFiles[key];
+
+            workflow = storeWorkflowOutput(workflow, {
+                taskId,
+                outputId: output.id,
+                content: existing.content,
+            });
+
+            workflow = validateWorkflowOutput(workflow, {
+                taskId,
+                outputId: output.id,
+            });
+
+            workflow = assignWorkflowOutputDestination(workflow, {
+                taskId,
+                outputId: output.id,
+                path: existing.path,
+                confirmed: true,
+            });
+
+            workflow = markWorkflowOutputWritten(workflow, {
+                taskId,
+                outputId: output.id,
+            });
+        }
+
+        workflow = completeWorkflowTask(workflow, taskId);
+        await persist(tabId, workflow);
+
+        emit("existing_implementation_skipped", {
+            taskId,
+            paths: taskDefinition.outputs.map(
+                (output) => workflow.input.existingFiles[
+                    `${taskId}.${output.id}`
+                ].path
+            ),
+        });
+
+        return workflow;
+    }
+
+
     /**
      * Validate persisted outputs before attempting recovery.
      */
@@ -598,19 +765,34 @@ export function createWorkflowExecutionController({
                 return workflow;
             }
 
-            // An empty placeholder may receive generated content,
-            // but a previously written output must never be overwritten.
+            // Existing non-empty files are protected by default. Automatic
+            // continuation may update them because the native host creates a
+            // timestamped backup before replacing an existing destination.
             if (
-                existingFile.content.trim() !== "" ||
                 taskOutput.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
             ) {
                 throw new Error(
-                    `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
+                    `Recovery conflict: "${destination}" was previously written by this workflow but now contains different content. It was not overwritten.`
                 );
             }
 
-            // Empty or whitespace-only file:
-            // continue below to the normal write operation.
+            if (existingFile.content.trim() !== "") {
+                if (!workflow.input?.automaticContinuation) {
+                    throw new Error(
+                        `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
+                    );
+                }
+
+                emit("existing_file_update_authorized", {
+                    taskId,
+                    outputId: output.outputId,
+                    path: destination,
+                    backupRequired: true,
+                });
+            }
+
+            // Continue to the native write operation. The native host is
+            // responsible for creating and returning the backup path.
         }
 
 
@@ -634,6 +816,29 @@ export function createWorkflowExecutionController({
                 writeResponse.error ||
                 `Native host failed to write "${destination}".`
             );
+        }
+
+        if (
+            currentFiles.has(destination) &&
+            workflow.input?.automaticContinuation
+        ) {
+            const backupPath =
+                writeResponse?.backup ||
+                writeResponse?.result?.backup ||
+                writeResponse?.data?.backup;
+
+            if (!backupPath) {
+                throw new Error(
+                    `The native host did not confirm a backup for existing file "${destination}". The update was not accepted as safe.`
+                );
+            }
+
+            emit("existing_file_backed_up", {
+                taskId,
+                outputId: output.outputId,
+                path: destination,
+                backupPath,
+            });
         }
 
         assertNotStopped(shouldStop);
@@ -781,11 +986,22 @@ export function createWorkflowExecutionController({
 
                 // 2. Generate the prompt and automatically reduce temporary
                 // Python source context if it exceeds the conservative budget.
+                const existingFilesForTask = Object.fromEntries(
+                    (taskDefinition.outputs || [])
+                        .map((output) => {
+                            const key = `${taskId}.${output.id}`;
+                            const existing = workflow.input?.existingFiles?.[key];
+                            return existing ? [key, existing] : null;
+                        })
+                        .filter(Boolean)
+                );
+
                 let prompt = generateWorkflowPrompt({
                     workflow,
                     taskId,
                     sourceContents,
                     sourcePaths,
+                    existingFiles: existingFilesForTask,
                     additionalInstructions,
                     definition,
                 });
@@ -820,11 +1036,26 @@ export function createWorkflowExecutionController({
                         sourceModes: compactedSourceModes,
                     });
 
+                    const compactedExistingFiles = Object.fromEntries(
+                        Object.entries(existingFilesForTask).map(([key, file]) => [
+                            key,
+                            {
+                                ...file,
+                                content: prepareSourceContent({
+                                    content: file.content,
+                                    path: file.path,
+                                    mode: "compact",
+                                }).content,
+                            },
+                        ])
+                    );
+
                     const compactedPrompt = generateWorkflowPrompt({
                         workflow,
                         taskId,
                         sourceContents: compactedSources.sourceContents,
                         sourcePaths: compactedSources.sourcePaths,
+                        existingFiles: compactedExistingFiles,
                         additionalInstructions,
                         definition,
                     });
@@ -1215,6 +1446,25 @@ export function createWorkflowExecutionController({
                     }
 
                     break;
+                }
+
+                if (workflow.input?.automaticContinuation) {
+                    const assessment = await assessExistingTask({
+                        tabId,
+                        workflow,
+                        taskId: nextTask.id,
+                    });
+
+                    workflow = assessment.workflow;
+
+                    if (assessment.status === "COMPLETE") {
+                        workflow = await seedAssessedTask({
+                            tabId,
+                            workflow,
+                            taskId: nextTask.id,
+                        });
+                        continue;
+                    }
                 }
 
                 workflow = await executeTask({

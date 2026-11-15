@@ -19,6 +19,7 @@ import {
     saveBatchState,
     getBatchState,
     updateBatchState,
+    removeBatchState,
     BATCH_STATUS,
     BATCH_MODE,
     BATCH_MODEL_STATUS,
@@ -221,15 +222,14 @@ function extractFileContent(response, path) {
             ? response
             : response?.content;
 
-    if (
-        typeof content !== "string" ||
-        !content.trim()
-    ) {
+    if (typeof content !== "string") {
         throw new Error(
-            `Existing model file "${path}" is empty or could not be read.`
+            `Existing model file "${path}" could not be read.`
         );
     }
 
+    // An empty placeholder is readable, but it is not a completed model.
+    // The caller decides whether to seed or generate the model task.
     return content;
 }
 
@@ -437,6 +437,120 @@ export function discoverDjangoModelFiles(files) {
  *         "remove_tests" | "remove_comments_and_tests"
  * }
  */
+
+/**
+ * Remove an unstarted batch when the user clears the model selection.
+ */
+export async function clearWorkflowBatchSelection(tabId, batchId) {
+    assertValidTabId(tabId);
+
+    const record = await getBatchState(tabId);
+    const batch = getBatchFromRecord(record);
+
+    if (!batch || batch.id !== batchId) {
+        return null;
+    }
+
+    if (batch.status !== BATCH_STATUS.READY) {
+        throw new Error("Only an unstarted batch can be cleared by changing the model selection.");
+    }
+
+    await removeBatchState(tabId);
+    return null;
+}
+
+/**
+ * Update a not-yet-started batch from the current model selection.
+ * Existing selected entries are retained; deselected entries are removed.
+ */
+export async function updateWorkflowBatchSelection({
+    tabId,
+    batchId,
+    models,
+    modelSource = "existing",
+    sourceMode = "full",
+}) {
+    assertValidTabId(tabId);
+
+    if (!Array.isArray(models) || models.length === 0) {
+        throw new Error("Select at least one Django model file.");
+    }
+
+    const record = await getBatchState(tabId);
+    const batch = getBatchFromRecord(record);
+
+    if (!batch || batch.id !== batchId) {
+        throw new Error("The saved batch could not be found.");
+    }
+
+    if (batch.status !== BATCH_STATUS.READY) {
+        throw new Error("Only a batch that has not started can have its execution list updated.");
+    }
+
+    const normalizedModels = models.map((model) =>
+        getModelConfiguration(model, { modelSource, sourceMode })
+    );
+    const seen = new Set();
+
+    for (const model of normalizedModels) {
+        if (seen.has(model.path)) {
+            throw new Error(`Duplicate model selected: "${model.path}".`);
+        }
+        seen.add(model.path);
+    }
+
+    const previousByPath = new Map(
+        batch.models.map((model) => [model.path, model])
+    );
+    const timestamp = now();
+
+    batch.models = normalizedModels.map((model) => {
+        const previous = previousByPath.get(model.path);
+
+        if (previous) {
+            return {
+                ...previous,
+                modelSource: model.modelSource,
+                sourceMode: model.sourceMode,
+                updatedAt: timestamp,
+            };
+        }
+
+        return {
+            path: model.path,
+            modelSource: model.modelSource,
+            sourceMode: model.sourceMode,
+            status: BATCH_MODEL_STATUS.PENDING,
+            workflow: null,
+            error: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: null,
+            completedAt: null,
+        };
+    });
+
+    batch.currentIndex = Math.max(
+        0,
+        batch.models.findIndex((model) =>
+            model.status === BATCH_MODEL_STATUS.PENDING ||
+            model.status === BATCH_MODEL_STATUS.FAILED
+        )
+    );
+
+    if (batch.models.every((model) =>
+        model.status === BATCH_MODEL_STATUS.COMPLETED ||
+        model.status === BATCH_MODEL_STATUS.SKIPPED
+    )) {
+        batch.currentIndex = batch.models.length;
+    }
+
+    batch.updatedAt = timestamp;
+    await saveBatchState(tabId, batch);
+
+    return batch;
+}
+
 export async function createWorkflowBatch({
     tabId,
     projectId,
@@ -618,6 +732,13 @@ async function seedExistingModel({
         model.path
     );
 
+    // Empty placeholder files must not be marked as completed model outputs.
+    // Leave create_model pending so ChatGPT can generate the implementation;
+    // the normal write path can safely populate the existing empty file.
+    if (!content.trim()) {
+        return workflow;
+    }
+
     const taskDefinition = getModelTaskDefinition(definition);
     const outputDefinition = taskDefinition.outputs[0];
 
@@ -681,6 +802,7 @@ async function prepareModelWorkflow({
     batch,
     model,
     readFile,
+    listFiles,
     definition,
 }) {
     let workflow = model.workflow;
@@ -691,6 +813,18 @@ async function prepareModelWorkflow({
             model,
             definition,
         });
+    }
+
+    if (typeof listFiles === "function") {
+        const implementationPlan = await planAutomaticWorkflow({
+            modelPath: model.path,
+            listFiles,
+            readFile,
+        });
+
+        workflow.input.existingFiles = implementationPlan.existingFiles;
+        workflow.input.implementationPlan = implementationPlan;
+        workflow.input.automaticContinuation = true;
     }
 
     if (
@@ -769,6 +903,7 @@ export async function startWorkflowBatch({
     batchId,
     runModel,
     readFile,
+    listFiles,
     definition = DJANGO_MODEL_WORKFLOW,
     onBatchChange = () => {},
     onModelChange = () => {},
@@ -974,6 +1109,7 @@ export async function startWorkflowBatch({
                         workflow,
                     },
                     readFile,
+                    listFiles,
                     definition,
                 });
 
