@@ -727,7 +727,6 @@ export async function runWorkflowBatch({
 
                     // Existing model content remains an input to create_model.
                     // The task decides whether it needs completion or can be preserved.
-                    workflow.input.automaticContinuation = true;
 
                     model.workflow = structuredClone(workflow);
                     await persistBatch(
