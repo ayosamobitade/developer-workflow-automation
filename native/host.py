@@ -1187,7 +1187,16 @@ def write_project_file(
             os.lseek(original_fd, 0, os.SEEK_SET)
             existing_content = os.read(original_fd, opened_stat.st_size)
 
-            if existing_content.strip():
+            try:
+                has_existing_content = bool(
+                    existing_content.decode("utf-8").strip()
+                )
+            except UnicodeDecodeError as error:
+                raise ValueError(
+                    "Refusing to replace a destination that is not valid UTF-8 text."
+                ) from error
+
+            if has_existing_content:
                 raise ValueError(
                     "Refusing to overwrite an existing non-empty file. "
                     "Existing implementations are read-only to PromptFlow."
@@ -1232,7 +1241,16 @@ def write_project_file(
             os.lseek(original_fd, 0, os.SEEK_SET)
             current_content = os.read(original_fd, current_size)
 
-            if current_content.strip():
+            try:
+                has_current_content = bool(
+                    current_content.decode("utf-8").strip()
+                )
+            except UnicodeDecodeError as error:
+                raise ValueError(
+                    "Destination changed to non-UTF-8 content during writing."
+                ) from error
+
+            if has_current_content:
                 raise ValueError(
                 "Destination became non-empty during writing. "
                 "The existing implementation was not replaced."
@@ -1263,12 +1281,27 @@ def write_project_file(
                 "The original file was not replaced."
             )
 
-        os.replace(
-            temporary_name,
-            filename,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
+        # Publish with a no-overwrite hard link rather than os.replace().
+        # If another process creates the destination after our final check,
+        # link() fails instead of replacing that new file.
+        if original_stat is not None:
+            os.unlink(filename, dir_fd=parent_fd)
+
+        try:
+            os.link(
+                temporary_name,
+                filename,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as error:
+            raise ValueError(
+                "A file appeared at the destination during writing. "
+                "The existing file was not overwritten."
+            ) from error
+
+        os.unlink(temporary_name, dir_fd=parent_fd)
         temporary_name = None
         os.fsync(parent_fd)
 
