@@ -525,7 +525,8 @@ export function createWorkflowExecutionController({
         const prompt = buildImplementationAssessmentPrompt(
             plan,
             definition,
-            [taskId]
+            [taskId],
+            workflow
         );
 
         if (!prompt) {
