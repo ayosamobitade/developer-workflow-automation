@@ -19,6 +19,7 @@ import {
     saveBatchState,
     getBatchState,
     updateBatchState,
+    removeBatchState,
     BATCH_STATUS,
     BATCH_MODE,
     BATCH_MODEL_STATUS,
