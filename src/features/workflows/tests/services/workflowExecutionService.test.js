@@ -653,3 +653,77 @@ test(
         assert.equal(MAX_PROMPT_TOKENS, 24000);
     }
 );
+
+test(
+    "provides an existing dependency separately and resends the exact original prompt",
+    async () => {
+        const workflow = createWorkflowInstance({
+            definition: MODEL_RECOVERY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree: "core/finance/payments/models/payment.py",
+        });
+        const dependencyPath = "core/finance/payments/models/customer.py";
+        const dependencyContent = "class Customer:\\n    pass\\n";
+        const originalPrompts = [];
+        const sentPrompts = [];
+        let call = 0;
+
+        const dependencyRequest = [
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_START>>>",
+            JSON.stringify({
+                path: dependencyPath,
+                reason: "The relationship requires the customer model.",
+                requiredFor: "Payment.customer",
+            }),
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>",
+        ].join("\\n");
+
+        const outputResponse = [
+            "<<<PROMPTFLOW_OUTPUT_START:model>>>",
+            "```python",
+            MODEL_CONTENT.trimEnd(),
+            "```",
+            "<<<PROMPTFLOW_OUTPUT_END:model>>>",
+        ].join("\\n");
+
+        const environment = createExecutionEnvironment({
+            workflow,
+            initialFiles: {
+                [dependencyPath]: dependencyContent,
+            },
+            sendPrompt: async (prompt) => {
+                sentPrompts.push(prompt);
+                call += 1;
+                if (call === 1) {
+                    originalPrompts.push(prompt);
+                    return dependencyRequest;
+                }
+                if (call === 2) {
+                    assert.match(prompt, /PROMPTFLOW ADDITIONAL SOURCE FILE/);
+                    assert.match(prompt, /class Customer/);
+                    assert.doesNotMatch(prompt, /PROMPTFLOW WORKFLOW TASK/);
+                    return "Source received.";
+                }
+                originalPrompts.push(prompt);
+                return outputResponse;
+            },
+        });
+
+        const result = await environment.controller.run({
+            tabId: 10,
+            workflow,
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(call, 3);
+        assert.equal(originalPrompts.length, 2);
+        assert.equal(originalPrompts[0], originalPrompts[1]);
+        assert.match(originalPrompts[0], /TASK INSTRUCTIONS/);
+        assert.equal(sentPrompts[0], sentPrompts[2]);
+        assert.equal(environment.calls.writeFile.length, 1);
+        assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT);
+    }
+);
+
