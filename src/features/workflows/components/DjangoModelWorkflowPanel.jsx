@@ -42,6 +42,7 @@ import {
     discoverDjangoModelFiles,
     createWorkflowBatch,
     updateWorkflowBatchSelection,
+    clearWorkflowBatchSelection,
     retryBatchModel,
     skipBatchModel,
     getBatchProgress,
@@ -504,6 +505,9 @@ export default function DjangoModelWorkflowPanel({
                     null;
 
                 setBatch(savedBatch);
+                if (savedBatch?.models?.length) {
+                    setSelectedModels(savedBatch.models.map((model) => model.path));
+                }
 
                 if (savedBatch?.id) {
                     try {
@@ -616,6 +620,52 @@ export default function DjangoModelWorkflowPanel({
         );
     }, [nativeProjectFiles]);
 
+
+    // Keep the saved, not-yet-started execution list synchronized with
+    // the checkboxes. Deselecting a model removes it from the actual batch.
+    useEffect(() => {
+        if (!batch || batch.status !== BATCH_STATUS.READY || isRunning) {
+            return;
+        }
+
+        const currentPaths = batch.models.map((model) => model.path);
+        const sameSelection =
+            currentPaths.length === selectedModels.length &&
+            currentPaths.every((path, index) => path === selectedModels[index]);
+
+        if (sameSelection) return;
+
+        let cancelled = false;
+
+        async function synchronizeSelection() {
+            try {
+                if (!selectedModels.length) {
+                    await clearWorkflowBatchSelection(activeTabId, batch.id);
+                    if (!cancelled) setBatch(null);
+                    return;
+                }
+
+                const updated = await updateWorkflowBatchSelection({
+                    tabId: activeTabId,
+                    batchId: batch.id,
+                    models: selectedModels,
+                    sourceMode,
+                });
+
+                if (!cancelled) setBatch(updated);
+            } catch (err) {
+                if (!cancelled) {
+                    setError(err.message || "Unable to update the model execution list.");
+                }
+            }
+        }
+
+        synchronizeSelection();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedModels, batch?.id, batch?.status, isRunning, activeTabId, sourceMode]);
 
     function handleSelectAllModels() {
         setSelectedModels([...discoveredModels]);
