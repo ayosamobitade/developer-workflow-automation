@@ -6,7 +6,7 @@ import {
     extractDependencyRequest,
     buildDependencyFilePrompt,
     extractDependencyFile,
-    buildPromptWithDependencySources,
+    buildDependencyContextPrompt,
 } from "../../services/dependencyResolutionService.js";
 
 test("parses a structured dependency request", () => {
@@ -61,14 +61,15 @@ test("extracts complete dependency file content", () => {
     assert.equal(extractDependencyFile(response), "class User:\n    pass");
 });
 
-test("resends original prompt with resolved dependency source", () => {
-    const prompt = buildPromptWithDependencySources("Create a selector.", [{
+test("builds dependency context as a separate message without embedding the original instruction", () => {
+    const context = buildDependencyContextPrompt({
         path: "core/accounts/models/user.py",
         reason: "Related model",
-        content: "class User: pass",
-    }]);
+        requiredFor: "Foreign key",
+    }, "class User: pass");
 
-    assert.match(prompt, /Create a selector\./);
-    assert.match(prompt, /DEPENDENCY FILE AVAILABLE: core\/accounts\/models\/user\.py/);
-    assert.match(prompt, /class User: pass/);
+    assert.match(context, /PROMPTFLOW ADDITIONAL SOURCE FILE/);
+    assert.match(context, /class User: pass/);
+    assert.match(context, /follow that next instruction/);
+    assert.doesNotMatch(context, /Create a selector/);
 });
