@@ -54,8 +54,8 @@ function formatProjectTree(projectTree) {
     }
 
     return [
-        "PROJECT FILE TREE",
-        "=================",
+        "MODEL FILE TREE",
+        "===============",
         filteredTree.trim(),
     ].join("\n");
 }
@@ -65,6 +65,10 @@ function formatSourceFiles(task, sourceContents, sourcePaths = {}) {
     const sections = [];
 
     for (const source of task.sources) {
+        // The model-only tree is rendered once in its dedicated section.
+        // Never include the unfiltered project tree again as a source file.
+        if (source.type === "project_tree") continue;
+
         const content = sourceContents[source.id];
 
         if (!content?.trim()) {
