@@ -1108,16 +1108,18 @@ export function createWorkflowExecutionController({
         tabId,
         taskId,
         persist,
+        preserveOriginalPrompt = true,
         resolvedPaths = new Set(),
     }) {
         if (
+            preserveOriginalPrompt &&
             workflow.input.dependencyResolution?.taskId === taskId &&
             typeof workflow.input.dependencyResolution.originalPrompt === "string"
         ) {
             // A retry after interruption must use the exact instruction that
             // originally triggered dependency resolution.
             prompt = workflow.input.dependencyResolution.originalPrompt;
-        } else {
+        } else if (preserveOriginalPrompt) {
             workflow.input.dependencyResolution = {
                 taskId,
                 originalPrompt: prompt,
@@ -1246,6 +1248,7 @@ export function createWorkflowExecutionController({
                 tabId,
                 taskId: taskId,
                 persist,
+                preserveOriginalPrompt: false,
                 resolvedPaths,
             });
 
@@ -1334,6 +1337,7 @@ export function createWorkflowExecutionController({
             tabId,
             taskId,
             persist,
+            preserveOriginalPrompt,
             resolvedPaths,
         });
     }
@@ -1569,6 +1573,7 @@ export function createWorkflowExecutionController({
                     tabId,
                     taskId,
                     persist,
+                    preserveOriginalPrompt: true,
                 });
 
                 assertNotStopped(shouldStop);
