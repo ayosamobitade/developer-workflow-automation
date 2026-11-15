@@ -1368,6 +1368,7 @@ async function executeWorkflow(initialWorkflow) {
                 implementationPlan.existingFiles;
             newWorkflow.input.implementationPlan =
                 implementationPlan;
+            newWorkflow.input.automaticContinuation = true;
 
             const existingModel =
                 implementationPlan.existingFiles["create_model.model"];
@@ -1381,6 +1382,7 @@ async function executeWorkflow(initialWorkflow) {
                     implementationPlan.existingFiles;
                 newWorkflow.input.implementationPlan =
                     implementationPlan;
+                newWorkflow.input.automaticContinuation = true;
             }
 
             emitImplementationPlanNotice(
