@@ -1550,7 +1550,7 @@ export function createWorkflowExecutionController({
                     sourcePaths,
                     existingFiles: existingFilesForTask,
                     additionalInstructions,
-                    executionDefinition,
+                    definition: executionDefinition,
                 });
 
                 const initialPromptSize = estimatePromptTokens(prompt);
@@ -1604,7 +1604,7 @@ export function createWorkflowExecutionController({
                         sourcePaths: compactedSources.sourcePaths,
                         existingFiles: compactedExistingFiles,
                         additionalInstructions,
-                        executionDefinition,
+                        definition: executionDefinition,
                     });
 
                     const compactedTokens = estimatePromptTokens(compactedPrompt);
@@ -1642,7 +1642,7 @@ export function createWorkflowExecutionController({
                 const responseText = await sendPromptWithDependencies({
                     prompt,
                     workflow,
-                    executionDefinition,
+                    definition: executionDefinition,
                     readFile,
                     writeFile,
                     listFiles,
@@ -1671,7 +1671,7 @@ export function createWorkflowExecutionController({
                 const extracted = extractWorkflowOutputs({
                     response: responseText,
                     taskId,
-                    executionDefinition,
+                    definition: executionDefinition,
                 });
 
                 if (
@@ -1691,7 +1691,7 @@ export function createWorkflowExecutionController({
                 const destinations = resolveWorkflowDestinations({
                     workflow,
                     taskId,
-                    executionDefinition,
+                    definition: executionDefinition,
                     projectFiles,
                     projectTree: workflow.input?.projectTree || "",
                     explicitDestinations:
@@ -1788,7 +1788,7 @@ export function createWorkflowExecutionController({
                 const validation = validateWorkflowOutputs({
                     taskId,
                     outputs: outputsForValidation,
-                    executionDefinition,
+                    definition: executionDefinition,
                 });
 
                 if (!validation.valid) {

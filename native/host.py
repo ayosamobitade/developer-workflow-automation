@@ -1184,7 +1184,10 @@ def write_project_file(
                     "Destination changed during validation. Please retry."
                 )
 
-            if opened_stat.st_size > 0:
+            os.lseek(original_fd, 0, os.SEEK_SET)
+            existing_content = os.read(original_fd, opened_stat.st_size)
+
+            if existing_content.strip():
                 raise ValueError(
                     "Refusing to overwrite an existing non-empty file. "
                     "Existing implementations are read-only to PromptFlow."
@@ -1224,8 +1227,13 @@ def write_project_file(
 
         # Re-check the opened destination immediately before replacement.
         # This also catches a writer that populated an initially empty file.
-        if original_fd is not None and os.fstat(original_fd).st_size > 0:
-            raise ValueError(
+        if original_fd is not None:
+            current_size = os.fstat(original_fd).st_size
+            os.lseek(original_fd, 0, os.SEEK_SET)
+            current_content = os.read(original_fd, current_size)
+
+            if current_content.strip():
+                raise ValueError(
                 "Destination became non-empty during writing. "
                 "The existing implementation was not replaced."
             )
