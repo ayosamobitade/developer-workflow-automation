@@ -1373,6 +1373,7 @@ export function createWorkflowExecutionController({
                         `Protected implementation "${snapshot.path}" changed after it was recorded. It was not overwritten; refresh the workflow plan before continuing.`
                     );
                 }
+                outputInstance.required = false;
                 existingOutputIds.add(outputDefinition.id);
                 continue;
             }
