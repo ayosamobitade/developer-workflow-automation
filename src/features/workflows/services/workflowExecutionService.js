@@ -37,7 +37,14 @@ import {
 
 import {
     resolveWorkflowDestinations,
+    resolveWorkflowOutputDestination,
 } from "./workflowDestinationService.js";
+
+import {
+    extractDependencyRequest,
+    normalizeDependencyPath,
+    buildDependencyContextPrompt,
+} from "./dependencyResolutionService.js";
 
 import {
     validateWorkflowOutputs,
@@ -121,6 +128,53 @@ function getSourceMode(source, overrides = {}) {
     return source.preparation?.mode || "full";
 }
 
+
+
+function getResponseText(response) {
+    return typeof response === "string"
+        ? response
+        : response?.response?.text;
+}
+
+
+function findDependencyOutput({
+    workflow,
+    definition,
+    dependencyPath,
+    projectFiles,
+}) {
+    const matches = [];
+
+    for (const task of definition.tasks) {
+        for (const output of task.outputs || []) {
+            const destination = resolveWorkflowOutputDestination({
+                workflow,
+                taskId: task.id,
+                outputId: output.id,
+                projectFiles,
+                projectTree: workflow.input?.projectTree || "",
+                explicitDestinations: workflow.explicitDestinations || {},
+            });
+
+            if (
+                destination.path &&
+                normalizeDependencyPath(destination.path) === dependencyPath
+            ) {
+                matches.push({ task, output });
+            }
+        }
+    }
+
+    if (matches.length !== 1) {
+        throw new Error(
+            matches.length
+                ? `Dependency path "${dependencyPath}" matches more than one workflow output.`
+                : `PromptFlow does not have a normal file-generation instruction for dependency "${dependencyPath}". The file cannot be generated safely by guessing its type.`
+        );
+    }
+
+    return matches[0];
+}
 
 async function loadTaskSources({
     workflow,
@@ -876,6 +930,192 @@ export function createWorkflowExecutionController({
     }
 
 
+
+    async function sendPromptWithDependencies({
+        prompt,
+        workflow,
+        definition,
+        readFile,
+        writeFile,
+        listFiles,
+        sendPrompt,
+        sourceModes,
+        shouldStop,
+        emit,
+        resolvedPaths = new Set(),
+    }) {
+        const response = await sendPrompt(prompt);
+        assertNotStopped(shouldStop);
+
+        const responseText = getResponseText(response);
+        if (typeof responseText !== "string" || !responseText.trim()) {
+            throw new Error("ChatGPT returned an empty or invalid response.");
+        }
+
+        const request = extractDependencyRequest(responseText);
+        if (!request) return responseText;
+
+        const dependencyPath = normalizeDependencyPath(request.path);
+        if (resolvedPaths.has(dependencyPath)) {
+            throw new Error(
+                `ChatGPT requested dependency "${dependencyPath}" more than once without progressing. Dependency resolution was stopped to prevent an infinite loop.`
+            );
+        }
+        if (resolvedPaths.size >= 12) {
+            throw new Error("Dependency resolution exceeded the limit of 12 files.");
+        }
+        resolvedPaths.add(dependencyPath);
+
+        emit("dependency_requested", {
+            path: dependencyPath,
+            reason: request.reason,
+            requiredFor: request.requiredFor,
+        });
+
+        let dependency = await readFile(dependencyPath);
+        let dependencyContent =
+            dependency && typeof dependency.content === "string"
+                ? dependency.content
+                : "";
+
+        if (!dependencyContent.trim()) {
+            emit("dependency_generation_started", {
+                path: dependencyPath,
+                wasEmpty: Boolean(dependency && typeof dependency.content === "string"),
+            });
+
+            const projectFiles = normalizeFileList(await listFiles());
+            assertNotStopped(shouldStop);
+
+            const { task, output } = findDependencyOutput({
+                workflow,
+                definition,
+                dependencyPath,
+                projectFiles: [...projectFiles],
+            });
+
+            // Reuse the exact task-specific instruction and source contract
+            // already used by the normal workflow, but request only this output.
+            const dependencyTask = {
+                ...task,
+                outputs: [output],
+            };
+            const dependencyDefinition = {
+                ...definition,
+                tasks: definition.tasks.map((item) =>
+                    item.id === task.id ? dependencyTask : item
+                ),
+            };
+
+            const { sourceContents, sourcePaths } = await loadTaskSources({
+                workflow,
+                task: dependencyTask,
+                readFile,
+                sourceModes,
+            });
+
+            const dependencyPrompt = generateWorkflowPrompt({
+                workflow,
+                taskId: task.id,
+                sourceContents,
+                sourcePaths,
+                destinationHints: {
+                    [output.id]: dependencyPath,
+                },
+                definition: dependencyDefinition,
+            });
+
+            const generatedResponse = await sendPromptWithDependencies({
+                prompt: dependencyPrompt,
+                workflow,
+                definition,
+                readFile,
+                writeFile,
+                listFiles,
+                sendPrompt,
+                sourceModes,
+                shouldStop,
+                emit,
+                resolvedPaths,
+            });
+
+            const generated = extractWorkflowOutputs({
+                response: generatedResponse,
+                taskId: task.id,
+                definition: dependencyDefinition,
+            }).outputs.find((item) => item.outputId === output.id);
+
+            if (!generated || !generated.content.trim()) {
+                throw new Error(
+                    `ChatGPT did not generate valid content for dependency "${dependencyPath}".`
+                );
+            }
+
+            const writeResult = await writeFile(
+                dependencyPath,
+                generated.content
+            );
+            if (writeResult && typeof writeResult === "object" && writeResult.ok === false) {
+                throw new Error(
+                    writeResult.error ||
+                    `Could not save generated dependency "${dependencyPath}".`
+                );
+            }
+
+            dependency = await readFile(dependencyPath);
+            if (
+                !dependency ||
+                typeof dependency.content !== "string" ||
+                dependency.content !== generated.content
+            ) {
+                throw new Error(
+                    `Generated dependency "${dependencyPath}" could not be verified after saving.`
+                );
+            }
+
+            dependencyContent = dependency.content;
+            emit("dependency_generation_completed", {
+                path: dependencyPath,
+                taskId: task.id,
+                outputId: output.id,
+            });
+        } else {
+            emit("dependency_file_found", {
+                path: dependencyPath,
+                contentLength: dependencyContent.length,
+            });
+        }
+
+        assertNotStopped(shouldStop);
+
+        // The dependency is a separate ChatGPT message. Do not append its
+        // contents to the original prompt: resend that exact prompt next.
+        await sendPrompt(
+            buildDependencyContextPrompt(request, dependencyContent)
+        );
+        assertNotStopped(shouldStop);
+
+        emit("dependency_provided", {
+            path: dependencyPath,
+            originalPromptResent: true,
+        });
+
+        return sendPromptWithDependencies({
+            prompt,
+            workflow,
+            definition,
+            readFile,
+            writeFile,
+            listFiles,
+            sendPrompt,
+            sourceModes,
+            shouldStop,
+            emit,
+            resolvedPaths,
+        });
+    }
+
+
     async function executeTask({
         tabId,
         workflow: initialWorkflow,
@@ -1090,15 +1330,22 @@ export function createWorkflowExecutionController({
                     compacted,
                 });
 
-                // 3. Send the prompt and wait for completion.
-                const response = await sendPrompt(prompt);
+                // 3. Send the prompt. If ChatGPT requests dependencies,
+                // resolve them as separate messages and resend this exact prompt.
+                const responseText = await sendPromptWithDependencies({
+                    prompt,
+                    workflow,
+                    definition,
+                    readFile,
+                    writeFile,
+                    listFiles,
+                    sendPrompt,
+                    sourceModes,
+                    shouldStop,
+                    emit,
+                });
 
                 assertNotStopped(shouldStop);
-
-                const responseText =
-                    typeof response === "string"
-                        ? response
-                        : response?.response?.text;
 
                 if (
                     typeof responseText !== "string" ||
