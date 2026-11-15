@@ -113,6 +113,7 @@ function App() {
     const [nativeError, setNativeError] = useState("");
     const [notice, setNotice] = useState("");
     const sessionsRef = useRef(new Map());
+    const workspaceRestoreSequenceRef = useRef(0);
 
     const createSession = useCallback(async (projectId, directory = "", permission = "read", confirmed = false) => {
         return sendNativeRequest({
@@ -283,31 +284,42 @@ function App() {
     }, [activeTabId, ensureReadSession, nativeWorkingDirectory]);
 
     const restoreWorkspace = useCallback(async (tabId) => {
+        const restoreSequence = ++workspaceRestoreSequenceRef.current;
+        const isCurrentRestore = () =>
+            workspaceRestoreSequenceRef.current === restoreSequence;
+
         setWorkspaceReady(false);
         setError("");
         setNotice("");
-        const key = `${WORKSPACE_STORAGE_PREFIX}${tabId}`;
-        const saved = await browser.storage.local.get(key);
-        const workspace = saved[key];
-        const projectId = workspace?.nativeProjectId || workspace?.projectId;
-        const projectName = workspace?.nativeProjectName || workspace?.projectName || "";
-        const workingDirectory = workspace?.nativeWorkingDirectory || workspace?.workingDirectory || "";
+        setNativeError("");
 
-        if (!projectId) {
-            setNativeProjectId("");
-            setNativeProjectName("");
-            setNativeWorkingDirectory("");
-            setNativeProjectFiles([]);
-            setNativeProjectDirectories([]);
-            setWorkspaceReady(true);
-            return;
-        }
-
-        setNativeProjectId(projectId);
-        setNativeProjectName(projectName);
-        setNativeWorkingDirectory(workingDirectory);
+        // Clear the previous tab's workspace immediately. The new tab's
+        // project context is loaded independently below.
+        setNativeProjectId("");
+        setNativeProjectName("");
+        setNativeWorkingDirectory("");
+        setNativeProjectFiles([]);
+        setNativeProjectDirectories([]);
 
         try {
+            const key = `${WORKSPACE_STORAGE_PREFIX}${tabId}`;
+            const saved = await browser.storage.local.get(key);
+
+            if (!isCurrentRestore()) return;
+
+            const workspace = saved[key];
+            const projectId = workspace?.nativeProjectId || workspace?.projectId;
+            const projectName = workspace?.nativeProjectName || workspace?.projectName || "";
+            const workingDirectory = workspace?.nativeWorkingDirectory || workspace?.workingDirectory || "";
+
+            if (!projectId) {
+                return;
+            }
+
+            setNativeProjectId(projectId);
+            setNativeProjectName(projectName);
+            setNativeWorkingDirectory(workingDirectory);
+
             const rootToken = await ensureReadSession(projectId, "", tabId);
             const [allFilesResponse, directoryResponse] = await Promise.all([
                 sendNativeRequest({
@@ -323,6 +335,9 @@ function App() {
                     token: rootToken,
                 }),
             ]);
+
+            if (!isCurrentRestore()) return;
+
             const scopedToken = await ensureReadSession(
                 projectId,
                 workingDirectory,
@@ -334,21 +349,33 @@ function App() {
                 directory: workingDirectory,
                 token: scopedToken,
             });
+
+            if (!isCurrentRestore()) return;
+
             setNativeProjectFiles(scopedResponse.files || []);
             setNativeProjectDirectories(directoryResponse.directories || []);
             setNativeConnected(true);
             setNativeVersion("");
             setNotice(`${projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
+
         } catch (restoreError) {
+            if (!isCurrentRestore()) return;
+
             await revokeTabSessions(tabId);
+
+            if (!isCurrentRestore()) return;
+
             setNativeProjectId("");
             setNativeProjectName("");
             setNativeWorkingDirectory("");
             setNativeProjectFiles([]);
             setNativeProjectDirectories([]);
             setNativeError(restoreError.message || "Unable to restore the registered project.");
+
         } finally {
-            setWorkspaceReady(true);
+            if (isCurrentRestore()) {
+                setWorkspaceReady(true);
+            }
         }
     }, [ensureReadSession, revokeTabSessions]);
 
@@ -366,8 +393,12 @@ function App() {
         const onActivated = (info) => {
             if (mounted) void activate(info.tabId);
         };
+        const onRemoved = (tabId) => {
+            if (mounted) void revokeTabSessions(tabId);
+        };
 
         browser.tabs.onActivated.addListener(onActivated);
+        browser.tabs.onRemoved.addListener(onRemoved);
         browser.tabs.query({ active: true, currentWindow: true })
             .then((tabs) => {
                 if (mounted && tabs[0]?.id !== undefined) {
@@ -382,10 +413,13 @@ function App() {
 
         return () => {
             mounted = false;
+            workspaceRestoreSequenceRef.current += 1;
             browser.tabs.onActivated.removeListener(onActivated);
-            for (const tabId of sessionsRef.current.keys()) {
-                void revokeTabSessions(tabId);
-            }
+            browser.tabs.onRemoved.removeListener(onRemoved);
+
+            // Do not revoke every project token when the sidebar closes:
+            // background workflows may still be using those tab-scoped tokens.
+            // Tokens are revoked on explicit disconnect, tab removal, or expiry.
         };
     }, [restoreWorkspace, revokeTabSessions]);
 
