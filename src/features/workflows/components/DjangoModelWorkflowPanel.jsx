@@ -509,31 +509,42 @@ export default function DjangoModelWorkflowPanel({
                     setSelectedModels(savedBatch.models.map((model) => model.path));
                 }
 
-                if (savedBatch?.id) {
-                    try {
-                        const executionStatus = await browser.runtime.sendMessage({
-                            type: "PROMPTFLOW_BACKGROUND_WORKFLOW_STATUS",
-                            workflowTabId: activeTabId,
-                        });
+                try {
+                    const executionStatus = await browser.runtime.sendMessage({
+                        type: "PROMPTFLOW_BACKGROUND_WORKFLOW_STATUS",
+                        workflowTabId: activeTabId,
+                    });
 
-                        const activeBatchRun =
-                            executionStatus?.run?.runType === "batch" &&
-                            executionStatus.run.batchId === savedBatch.id;
+                    if (cancelled) return;
 
-                        setIsRunning(Boolean(activeBatchRun));
+                    const activeRun = executionStatus?.run || null;
+                    const activeBatchRun =
+                        activeRun?.runType === "batch" &&
+                        Boolean(savedBatch?.id) &&
+                        activeRun.batchId === savedBatch.id;
+                    const activeSingleRun =
+                        activeRun?.runType === "workflow";
 
-                        if (activeBatchRun) {
-                            executionContextRef.current = {
-                                runType: "batch",
-                                batchId: savedBatch.id,
-                                tabId: activeTabId,
-                                projectId: savedBatch.project?.id,
-                                workingDirectory: savedBatch.workingDirectory || "",
-                            };
-                        }
-                    } catch {
-                        // The saved batch remains available even if status lookup fails.
+                    const hasActiveRun = activeBatchRun || activeSingleRun;
+                    setIsRunning(hasActiveRun);
+
+                    if (hasActiveRun) {
+                        executionContextRef.current = {
+                            runType: activeRun.runType,
+                            batchId: activeBatchRun ? activeRun.batchId : null,
+                            tabId: activeTabId,
+                            projectId: activeBatchRun
+                                ? savedBatch.project?.id
+                                : activeRun.projectId,
+                            workingDirectory: activeBatchRun
+                                ? savedBatch.workingDirectory || ""
+                                : activeRun.workingDirectory || "",
+                        };
+                    } else {
+                        executionContextRef.current = null;
                     }
+                } catch {
+                    // Saved workflow data remains available if status lookup fails.
                 }
 
                 const currentBatchModel =
@@ -783,8 +794,15 @@ export default function DjangoModelWorkflowPanel({
 
         if (!execution) return;
 
+        // A run belongs to its originating tab. Switching the panel to another
+        // tab must not stop that background run.
+        if (execution.tabId !== activeTabId) return;
+
+        // Workspace restoration temporarily clears the project context.
+        // Wait until this tab's workspace has loaded before comparing it.
+        if (!nativeProjectId) return;
+
         const contextChanged =
-            execution.tabId !== activeTabId ||
             execution.projectId !== nativeProjectId ||
             execution.workingDirectory !==
                 (nativeWorkingDirectory || "");
