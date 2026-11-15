@@ -1,6 +1,13 @@
 import { createWorkflowExecutionController } from "../features/workflows/services/workflowExecutionService";
 import { DJANGO_MODEL_WORKFLOW } from "../features/workflows/definitions/django-model-workflow";
 import {
+    extractDependencyRequest,
+    buildDependencyFilePrompt,
+    extractDependencyFile,
+    buildPromptWithDependencySources,
+    normalizeDependencyPath,
+} from "../features/workflows/services/dependencyResolutionService";
+import {
     startWorkflowBatch,
     pauseWorkflowBatch,
     stopWorkflowBatch,
@@ -152,6 +159,187 @@ async function sendPromptToChatGPT(chatTabId, prompt) {
 
     return response;
 }
+
+async function sendPromptWithDependencyResolution({
+    chatTabId,
+    prompt,
+    projectId,
+    workingDirectory,
+    readToken,
+    writeToken,
+    workflowTabId,
+    runId,
+}) {
+    const originalPrompt = prompt;
+    const dependencies = [];
+    const resolvedPaths = new Set();
+    const maxDependencies = 5;
+
+    for (let attempt = 0; attempt <= maxDependencies; attempt += 1) {
+        const currentPrompt = dependencies.length
+            ? buildPromptWithDependencySources(originalPrompt, dependencies)
+            : originalPrompt;
+
+        const response = await sendPromptToChatGPT(chatTabId, currentPrompt);
+        const request = extractDependencyRequest(response.response.text);
+
+        if (!request) {
+            return response;
+        }
+
+        if (resolvedPaths.has(request.path)) {
+            throw new Error(
+                `ChatGPT repeatedly requested the same dependency "${request.path}" after it was supplied.`
+            );
+        }
+
+        if (dependencies.length >= maxDependencies) {
+            throw new Error("The task requested too many additional dependency files.");
+        }
+
+        const dependencyPath = normalizeDependencyPath(request.path);
+        const files = await listProjectFiles({
+            projectId,
+            workingDirectory,
+            readToken,
+        });
+
+        const exists = files.some((file) => {
+            const path = typeof file === "string" ? file : file?.path;
+            return path?.replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "") === dependencyPath;
+        });
+
+        let content = "";
+
+        if (exists) {
+            const existing = await readProjectFile({
+                projectId,
+                workingDirectory,
+                readToken,
+                path: dependencyPath,
+            });
+
+            if (typeof existing.content !== "string") {
+                throw new Error(
+                    `PromptFlow could not read requested dependency "${dependencyPath}".`
+                );
+            }
+
+            content = existing.content;
+        }
+
+        if (!content.trim()) {
+            void broadcast(MESSAGE_TYPES.EVENT, {
+                event: "dependency_generation_started",
+                runId,
+                workflowTabId,
+                path: dependencyPath,
+                reason: request.reason,
+            });
+
+            const generatedResponse = await sendPromptToChatGPT(
+                chatTabId,
+                buildDependencyFilePrompt(request)
+            );
+            const generatedContent = extractDependencyFile(
+                generatedResponse.response.text
+            );
+
+            // Recheck immediately before writing. Never replace a non-empty
+            // file that appeared while ChatGPT was generating the dependency.
+            const refreshedFiles = await listProjectFiles({
+                projectId,
+                workingDirectory,
+                readToken,
+            });
+            const appeared = refreshedFiles.some((file) => {
+                const path = typeof file === "string" ? file : file?.path;
+                return path?.replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "") === dependencyPath;
+            });
+
+            if (appeared) {
+                const current = await readProjectFile({
+                    projectId,
+                    workingDirectory,
+                    readToken,
+                    path: dependencyPath,
+                });
+
+                if (typeof current.content !== "string") {
+                    throw new Error(
+                        `PromptFlow could not verify dependency "${dependencyPath}" before writing.`
+                    );
+                }
+
+                if (current.content.trim()) {
+                    content = current.content;
+                } else {
+                    await writeProjectFile({
+                        projectId,
+                        workingDirectory,
+                        writeToken,
+                        path: dependencyPath,
+                        content: generatedContent,
+                    });
+                    content = generatedContent;
+                }
+            } else {
+                await writeProjectFile({
+                    projectId,
+                    workingDirectory,
+                    writeToken,
+                    path: dependencyPath,
+                    content: generatedContent,
+                });
+                content = generatedContent;
+            }
+
+            const verified = await readProjectFile({
+                projectId,
+                workingDirectory,
+                readToken,
+                path: dependencyPath,
+            });
+
+            if (
+                typeof verified.content !== "string" ||
+                !verified.content.trim()
+            ) {
+                throw new Error(
+                    `PromptFlow saved dependency "${dependencyPath}" but could not verify its contents.`
+                );
+            }
+
+            content = verified.content;
+
+            void broadcast(MESSAGE_TYPES.EVENT, {
+                event: "dependency_file_ready",
+                runId,
+                workflowTabId,
+                path: dependencyPath,
+                generated: true,
+            });
+        } else {
+            void broadcast(MESSAGE_TYPES.EVENT, {
+                event: "dependency_file_found",
+                runId,
+                workflowTabId,
+                path: dependencyPath,
+                generated: false,
+            });
+        }
+
+        resolvedPaths.add(dependencyPath);
+        dependencies.push({
+            path: dependencyPath,
+            reason: request.reason,
+            content,
+        });
+    }
+
+    throw new Error("PromptFlow could not resolve all requested dependency files.");
+}
+
 
 
 function createConfirmationRequest({
@@ -308,9 +496,16 @@ async function runWorkflow(message) {
                 readToken,
             }),
 
-            sendPrompt: (prompt) => (
-                sendPromptToChatGPT(chatTabId, prompt)
-            ),
+            sendPrompt: (prompt) => sendPromptWithDependencyResolution({
+                chatTabId,
+                prompt,
+                projectId,
+                workingDirectory,
+                readToken,
+                writeToken,
+                workflowTabId,
+                runId,
+            }),
 
             confirmDestinations: (confirmation) => (
                 createConfirmationRequest({
@@ -482,9 +677,16 @@ async function runBatch(message) {
                         readToken,
                     }),
 
-                    sendPrompt: (prompt) => (
-                        sendPromptToChatGPT(chatTabId, prompt)
-                    ),
+                    sendPrompt: (prompt) => sendPromptWithDependencyResolution({
+                        chatTabId,
+                        prompt,
+                        projectId,
+                        workingDirectory,
+                        readToken,
+                        writeToken,
+                        workflowTabId,
+                        runId,
+                    }),
 
                     confirmDestinations: (confirmation) => (
                         createConfirmationRequest({
