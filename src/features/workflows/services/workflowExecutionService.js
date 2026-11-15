@@ -947,8 +947,14 @@ export function createWorkflowExecutionController({
         persist,
         resolvedPaths = new Set(),
     }) {
-        if (!workflow.input.dependencyResolution ||
-            workflow.input.dependencyResolution.taskId !== taskId) {
+        if (
+            workflow.input.dependencyResolution?.taskId === taskId &&
+            typeof workflow.input.dependencyResolution.originalPrompt === "string"
+        ) {
+            // A retry after interruption must use the exact instruction that
+            // originally triggered dependency resolution.
+            prompt = workflow.input.dependencyResolution.originalPrompt;
+        } else {
             workflow.input.dependencyResolution = {
                 taskId,
                 originalPrompt: prompt,
