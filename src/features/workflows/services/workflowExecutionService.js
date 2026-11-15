@@ -1625,6 +1625,13 @@ export function createWorkflowExecutionController({
 
             assertNotStopped(shouldStop);
 
+            // Preserve the dependency-resolution outcome with the task state.
+            if (workflow.input?.dependencyResolution?.taskId === taskId) {
+                workflow.input.dependencyResolution.status = "completed";
+                workflow.input.dependencyResolution.requestedPath = null;
+                await persist(tabId, workflow);
+            }
+
             // Complete only after every required output is written.
             workflow = completeWorkflowTask(
                 workflow,
