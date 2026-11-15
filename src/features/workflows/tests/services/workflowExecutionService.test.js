@@ -262,9 +262,9 @@ test(
         const modelTestPath =
             "core/finance/payments/tests/models/test_payment.py";
         const factoryContent =
-            "class PaymentFactory:\\n    pass\\n";
+            "class PaymentFactory:\n    pass\n";
         const modelTestContent =
-            "class PaymentTest:\\n    pass\\n";
+            "class PaymentTest:\n    pass\n";
 
         const workflow = createWorkflowInstance({
             definition: PARTIAL_FACTORY_WORKFLOW,
@@ -275,7 +275,7 @@ test(
                 MODEL_PATH,
                 factoryPath,
                 modelTestPath,
-            ].join("\\n"),
+            ].join("\n"),
             explicitDestinations: {
                 "create_factory_and_model_test.model_test": modelTestPath,
             },
@@ -334,7 +334,7 @@ test(
                     "<<<PROMPTFLOW_OUTPUT_START:model_test>>>",
                     modelTestContent,
                     "<<<PROMPTFLOW_OUTPUT_END:model_test>>>",
-                ].join("\\n");
+                ].join("\n");
             },
         });
 
