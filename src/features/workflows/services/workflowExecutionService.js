@@ -604,6 +604,7 @@ function assertNoIncompleteWrittenOutputs({
 
     const writtenOutput = task.outputs.find(
         (output) =>
+            output.required !== false &&
             output.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
     );
 
@@ -982,9 +983,6 @@ export function createWorkflowExecutionController({
                 return workflow;
             }
 
-            // Existing non-empty files are protected by default. Automatic
-            // continuation may update them because the native host creates a
-            // timestamped backup before replacing an existing destination.
             if (
                 taskOutput.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
             ) {
@@ -994,22 +992,13 @@ export function createWorkflowExecutionController({
             }
 
             if (existingFile.content.trim() !== "") {
-                if (!workflow.input?.automaticContinuation) {
-                    throw new Error(
-                        `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
-                    );
-                }
-
-                emit("existing_file_update_authorized", {
-                    taskId,
-                    outputId: output.outputId,
-                    path: destination,
-                    backupRequired: true,
-                });
+                throw new Error(
+                    `Protected-file conflict: "${destination}" already contains a non-empty implementation. PromptFlow will not replace it.`
+                );
             }
 
-            // Continue to the native write operation. The native host is
-            // responsible for creating and returning the backup path.
+            // Empty files may be populated. Non-empty files are immutable
+            // workflow inputs and are never authorized for replacement.
         }
 
 
@@ -1033,29 +1022,6 @@ export function createWorkflowExecutionController({
                 writeResponse.error ||
                 `Native host failed to write "${destination}".`
             );
-        }
-
-        if (
-            currentFiles.has(destination) &&
-            workflow.input?.automaticContinuation
-        ) {
-            const backupPath =
-                writeResponse?.backup ||
-                writeResponse?.result?.backup ||
-                writeResponse?.data?.backup;
-
-            if (!backupPath) {
-                throw new Error(
-                    `The native host did not confirm a backup for existing file "${destination}". The update was not accepted as safe.`
-                );
-            }
-
-            emit("existing_file_backed_up", {
-                taskId,
-                outputId: output.outputId,
-                path: destination,
-                backupPath,
-            });
         }
 
         assertNotStopped(shouldStop);
@@ -1350,7 +1316,7 @@ export function createWorkflowExecutionController({
         sourceModes = {},
         additionalInstructions = "",
     }) {
-        const taskDefinition = getTaskDefinition(
+        const fullTaskDefinition = getTaskDefinition(
             definition,
             taskId
         );
@@ -1360,6 +1326,120 @@ export function createWorkflowExecutionController({
             taskId,
             definition
         );
+
+        // Re-inspect every previously discovered non-empty output immediately
+        // before execution. Existing implementations are seeded as protected,
+        // already-written outputs; only missing/empty outputs are generated.
+        const existingOutputIds = new Set();
+
+        for (const outputDefinition of fullTaskDefinition.outputs || []) {
+            const key = `${taskId}.${outputDefinition.id}`;
+            const snapshot = workflow.input?.existingFiles?.[key];
+
+            if (!snapshot?.path) continue;
+
+            const current = await readFile(snapshot.path);
+
+            if (
+                current &&
+                current.exists !== false &&
+                typeof current.content !== "string"
+            ) {
+                throw new Error(
+                    current.error ||
+                    `Could not safely inspect existing implementation "${snapshot.path}".`
+                );
+            }
+
+            const content = typeof current?.content === "string"
+                ? current.content
+                : "";
+
+            if (!content.trim()) {
+                delete workflow.input.existingFiles[key];
+                continue;
+            }
+
+            const taskInstance = getTaskInstance(workflow, taskId);
+            const outputInstance = taskInstance.outputs.find(
+                (item) => item.id === outputDefinition.id
+            );
+
+            if (
+                outputInstance.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
+            ) {
+                if (outputInstance.content !== content) {
+                    throw new Error(
+                        `Protected implementation "${snapshot.path}" changed after it was recorded. It was not overwritten; refresh the workflow plan before continuing.`
+                    );
+                }
+                existingOutputIds.add(outputDefinition.id);
+                continue;
+            }
+
+            workflow = storeWorkflowOutput(workflow, {
+                taskId,
+                outputId: outputDefinition.id,
+                content,
+            });
+
+            workflow = validateWorkflowOutput(workflow, {
+                taskId,
+                outputId: outputDefinition.id,
+            });
+
+            workflow = assignWorkflowOutputDestination(workflow, {
+                taskId,
+                outputId: outputDefinition.id,
+                path: snapshot.path,
+                confirmed: true,
+            });
+
+            workflow = markWorkflowOutputWritten(workflow, {
+                taskId,
+                outputId: outputDefinition.id,
+            });
+
+            const seededTask = getTaskInstance(workflow, taskId);
+            seededTask.outputs.find(
+                (item) => item.id === outputDefinition.id
+            ).required = false;
+
+            workflow.input.existingFiles[key] = {
+                path: snapshot.path,
+                content,
+            };
+            existingOutputIds.add(outputDefinition.id);
+        }
+
+        // A multi-output stage can resume partially: existing outputs remain
+        // protected, while ChatGPT receives only the outputs still missing.
+        const taskDefinition = {
+            ...fullTaskDefinition,
+            outputs: fullTaskDefinition.outputs.filter(
+                (output) => !existingOutputIds.has(output.id)
+            ),
+        };
+
+        if (!taskDefinition.outputs.length) {
+            workflow = completeWorkflowTask(workflow, taskId);
+            await persist(tabId, workflow);
+
+            emit("existing_implementation_skipped", {
+                taskId,
+                paths: fullTaskDefinition.outputs.map((output) =>
+                    workflow.input.existingFiles[`${taskId}.${output.id}`]?.path
+                ),
+            });
+            return workflow;
+        }
+
+        const executionDefinition = {
+            ...definition,
+            tasks: definition.tasks.map((task) =>
+                task.id === taskId ? taskDefinition : task
+            ),
+        };
 
         await persist(tabId, workflow);
 
@@ -1470,7 +1550,7 @@ export function createWorkflowExecutionController({
                     sourcePaths,
                     existingFiles: existingFilesForTask,
                     additionalInstructions,
-                    definition,
+                    executionDefinition,
                 });
 
                 const initialPromptSize = estimatePromptTokens(prompt);
@@ -1524,7 +1604,7 @@ export function createWorkflowExecutionController({
                         sourcePaths: compactedSources.sourcePaths,
                         existingFiles: compactedExistingFiles,
                         additionalInstructions,
-                        definition,
+                        executionDefinition,
                     });
 
                     const compactedTokens = estimatePromptTokens(compactedPrompt);
@@ -1562,7 +1642,7 @@ export function createWorkflowExecutionController({
                 const responseText = await sendPromptWithDependencies({
                     prompt,
                     workflow,
-                    definition,
+                    executionDefinition,
                     readFile,
                     writeFile,
                     listFiles,
@@ -1591,7 +1671,7 @@ export function createWorkflowExecutionController({
                 const extracted = extractWorkflowOutputs({
                     response: responseText,
                     taskId,
-                    definition,
+                    executionDefinition,
                 });
 
                 if (
@@ -1611,7 +1691,7 @@ export function createWorkflowExecutionController({
                 const destinations = resolveWorkflowDestinations({
                     workflow,
                     taskId,
-                    definition,
+                    executionDefinition,
                     projectFiles,
                     projectTree: workflow.input?.projectTree || "",
                     explicitDestinations:
@@ -1708,7 +1788,7 @@ export function createWorkflowExecutionController({
                 const validation = validateWorkflowOutputs({
                     taskId,
                     outputs: outputsForValidation,
-                    definition,
+                    executionDefinition,
                 });
 
                 if (!validation.valid) {
@@ -1931,25 +2011,6 @@ export function createWorkflowExecutionController({
                     }
 
                     break;
-                }
-
-                if (workflow.input?.automaticContinuation) {
-                    const assessment = await assessExistingTask({
-                        tabId,
-                        workflow,
-                        taskId: nextTask.id,
-                    });
-
-                    workflow = assessment.workflow;
-
-                    if (assessment.status === "COMPLETE") {
-                        workflow = await seedAssessedTask({
-                            tabId,
-                            workflow,
-                            taskId: nextTask.id,
-                        });
-                        continue;
-                    }
                 }
 
                 workflow = await executeTask({

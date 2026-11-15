@@ -1184,11 +1184,12 @@ def write_project_file(
                     "Destination changed during validation. Please retry."
                 )
 
-            backup_path = backup_open_file(
-                project_id,
-                relative_path,
-                original_fd,
-            )
+            if opened_stat.st_size > 0:
+                raise ValueError(
+                    "Refusing to overwrite an existing non-empty file. "
+                    "Existing implementations are read-only to PromptFlow."
+                )
+
             file_mode = stat.S_IMODE(opened_stat.st_mode) & 0o777
         else:
             file_mode = 0o600
@@ -1220,6 +1221,14 @@ def write_project_file(
         os.fsync(temporary_fd)
         os.close(temporary_fd)
         temporary_fd = None
+
+        # Re-check the opened destination immediately before replacement.
+        # This also catches a writer that populated an initially empty file.
+        if original_fd is not None and os.fstat(original_fd).st_size > 0:
+            raise ValueError(
+                "Destination became non-empty during writing. "
+                "The existing implementation was not replaced."
+            )
 
         try:
             current_stat = os.stat(
@@ -1261,7 +1270,7 @@ def write_project_file(
             "ok": True,
             "path": relative_path,
             "backup": backup_path,
-            "created": backup_path is None,
+            "created": original_stat is None,
             "directory": normalized_directory,
             "message": "File successfully written.",
         }
