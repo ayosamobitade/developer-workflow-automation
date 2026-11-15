@@ -4,6 +4,10 @@ import {
 } from "../definitions/django-model-workflow.js";
 
 import {
+    planAutomaticWorkflow,
+} from "./automaticWorkflowPlanner.js";
+
+import {
     createWorkflowInstance,
     getWorkflowTaskDefinition,
     startWorkflowTask,
