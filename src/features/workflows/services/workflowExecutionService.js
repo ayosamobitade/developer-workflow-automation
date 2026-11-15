@@ -942,8 +942,22 @@ export function createWorkflowExecutionController({
         sourceModes,
         shouldStop,
         emit,
+        tabId,
+        taskId,
+        persist,
         resolvedPaths = new Set(),
     }) {
+        if (!workflow.input.dependencyResolution ||
+            workflow.input.dependencyResolution.taskId !== taskId) {
+            workflow.input.dependencyResolution = {
+                taskId,
+                originalPrompt: prompt,
+                status: "resolving",
+                dependencies: [],
+            };
+            await persist(tabId, workflow);
+        }
+
         const response = await sendPrompt(prompt);
         assertNotStopped(shouldStop);
 
@@ -965,6 +979,10 @@ export function createWorkflowExecutionController({
             throw new Error("Dependency resolution exceeded the limit of 12 files.");
         }
         resolvedPaths.add(dependencyPath);
+
+        workflow.input.dependencyResolution.requestedPath = dependencyPath;
+        workflow.input.dependencyResolution.status = "dependency_requested";
+        await persist(tabId, workflow);
 
         emit("dependency_requested", {
             path: dependencyPath,
@@ -1036,6 +1054,9 @@ export function createWorkflowExecutionController({
                 sourceModes,
                 shouldStop,
                 emit,
+                tabId,
+                taskId: taskId,
+                persist,
                 resolvedPaths,
             });
 
@@ -1088,6 +1109,16 @@ export function createWorkflowExecutionController({
 
         assertNotStopped(shouldStop);
 
+        workflow.input.dependencyResolution.dependencies.push({
+            path: dependencyPath,
+            reason: request.reason,
+            requiredFor: request.requiredFor,
+            content: dependencyContent,
+        });
+        workflow.input.dependencyResolution.requestedPath = null;
+        workflow.input.dependencyResolution.status = "source_ready";
+        await persist(tabId, workflow);
+
         // The dependency is a separate ChatGPT message. Do not append its
         // contents to the original prompt: resend that exact prompt next.
         await sendPrompt(
@@ -1111,6 +1142,9 @@ export function createWorkflowExecutionController({
             sourceModes,
             shouldStop,
             emit,
+            tabId,
+            taskId,
+            persist,
             resolvedPaths,
         });
     }
@@ -1343,6 +1377,9 @@ export function createWorkflowExecutionController({
                     sourceModes,
                     shouldStop,
                     emit,
+                    tabId,
+                    taskId,
+                    persist,
                 });
 
                 assertNotStopped(shouldStop);
