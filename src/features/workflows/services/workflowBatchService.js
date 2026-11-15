@@ -32,6 +32,10 @@ import {
     isInitFilePath,
 } from "./workflowPathUtils.js";
 
+import {
+    planAutomaticWorkflow,
+} from "./automaticWorkflowPlanner.js";
+
 
 const activeBatches = new Map();
 
@@ -710,23 +714,41 @@ export async function runWorkflowBatch({
                     ? structuredClone(model.workflow)
                     : createModelWorkflow(batch, model);
 
-                if (!model.workflow && model.mode === "existing") {
-                    workflow = await seedExistingModel({
-                        workflow,
+                if (!model.workflow) {
+                    const plan = await planAutomaticWorkflow({
                         modelPath: model.path,
+                        listFiles,
                         readFile,
                     });
 
-                    model.workflow = structuredClone(workflow);
+                    workflow.input.existingFiles = plan.existingFiles;
+                    workflow.input.implementationPlan = plan;
 
+                    const existingModel = plan.existingFiles["create_model.model"];
+
+                    if (existingModel) {
+                        workflow = await seedExistingModel({
+                            workflow,
+                            modelPath: model.path,
+                            readFile: async () => ({
+                                content: existingModel.content,
+                            }),
+                        });
+                        workflow.input.existingFiles = plan.existingFiles;
+                        workflow.input.implementationPlan = plan;
+                    }
+
+                    model.workflow = structuredClone(workflow);
                     await persistBatch(
                         normalizedTabId,
                         batch,
                         onBatchChange
                     );
 
-                    emit("existing_model_loaded", {
+                    emit("implementation_plan_created", {
                         modelPath: model.path,
+                        summary: plan.summary,
+                        deliverables: plan.deliverables,
                     });
                 }
 
