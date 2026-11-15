@@ -206,7 +206,7 @@ async function sendPromptWithDependencyResolution({
 
         const exists = files.some((file) => {
             const path = typeof file === "string" ? file : file?.path;
-            return path?.replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "") === dependencyPath;
+            return path?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") === dependencyPath;
         });
 
         let content = "";
@@ -254,7 +254,7 @@ async function sendPromptWithDependencyResolution({
             });
             const appeared = refreshedFiles.some((file) => {
                 const path = typeof file === "string" ? file : file?.path;
-                return path?.replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "") === dependencyPath;
+            return path?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") === dependencyPath;
             });
 
             if (appeared) {
