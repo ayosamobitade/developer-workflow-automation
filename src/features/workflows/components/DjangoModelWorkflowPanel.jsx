@@ -36,6 +36,10 @@ import {
 } from "../services/workflowPathUtils.js";
 
 import {
+    planAutomaticWorkflow,
+} from "../services/automaticWorkflowPlanner.js";
+
+import {
     getWorkflowState,
     saveWorkflowState,
 } from "../storage/workflowStorage.js";
@@ -1284,6 +1288,14 @@ async function executeWorkflow(initialWorkflow) {
     }
 
 
+    function emitImplementationPlanNotice(plan) {
+        const { missing, empty, existing } = plan.summary;
+        setNotice(
+            `Project inspected: ${existing} existing implementation(s), ${empty} empty file(s), and ${missing} missing file(s). PromptFlow will continue from the detected project state.`
+        );
+    }
+
+
     // ---------------------------------------------------------
     // START SINGLE WORKFLOW
     // ---------------------------------------------------------
@@ -1339,12 +1351,41 @@ async function executeWorkflow(initialWorkflow) {
             newWorkflow.input.workingDirectory =
                 nativeWorkingDirectory || "";
 
-            if (modelSourceMode === "existing") {
+            const implementationPlan = await planAutomaticWorkflow({
+                modelPath: modelPath.trim(),
+                listFiles: () => getNativeProjectFiles(
+                    nativeProjectId,
+                    nativeWorkingDirectory || ""
+                ),
+                readFile: (path) => readNativeProjectFile(
+                    nativeProjectId,
+                    path,
+                    nativeWorkingDirectory || ""
+                ),
+            });
+
+            newWorkflow.input.existingFiles =
+                implementationPlan.existingFiles;
+            newWorkflow.input.implementationPlan =
+                implementationPlan;
+
+            const existingModel =
+                implementationPlan.existingFiles["create_model.model"];
+
+            if (existingModel) {
                 newWorkflow = await seedExistingModelWorkflow(
                     newWorkflow,
                     modelPath.trim()
                 );
+                newWorkflow.input.existingFiles =
+                    implementationPlan.existingFiles;
+                newWorkflow.input.implementationPlan =
+                    implementationPlan;
             }
+
+            emitImplementationPlanNotice(
+                implementationPlan
+            );
 
             await saveWorkflowState(
                 activeTabId,
