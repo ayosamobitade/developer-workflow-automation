@@ -1255,19 +1255,6 @@ export function createWorkflowExecutionController({
             ),
         };
 
-        if (!taskDefinition.outputs.length) {
-            workflow = completeWorkflowTask(workflow, taskId);
-            await persist(tabId, workflow);
-
-            emit("existing_implementation_skipped", {
-                taskId,
-                paths: fullTaskDefinition.outputs.map((output) =>
-                    workflow.input.existingFiles[`${taskId}.${output.id}`]?.path
-                ),
-            });
-            return workflow;
-        }
-
         const executionDefinition = {
             ...definition,
             tasks: definition.tasks.map((task) =>
@@ -1284,6 +1271,19 @@ export function createWorkflowExecutionController({
 
         try {
             assertNotStopped(shouldStop);
+
+            if (!taskDefinition.outputs.length) {
+                workflow = completeWorkflowTask(workflow, taskId);
+                await persist(tabId, workflow);
+
+                emit("existing_implementation_skipped", {
+                    taskId,
+                    paths: fullTaskDefinition.outputs.map((output) =>
+                        workflow.input.existingFiles[`${taskId}.${output.id}`]?.path
+                    ),
+                });
+                return workflow;
+            }
 
             /*
              * RECOVERY CHECK
