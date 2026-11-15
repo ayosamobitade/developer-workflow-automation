@@ -438,6 +438,27 @@ export function discoverDjangoModelFiles(files) {
  */
 
 /**
+ * Remove an unstarted batch when the user clears the model selection.
+ */
+export async function clearWorkflowBatchSelection(tabId, batchId) {
+    assertValidTabId(tabId);
+
+    const record = await getBatchState(tabId);
+    const batch = getBatchFromRecord(record);
+
+    if (!batch || batch.id !== batchId) {
+        return null;
+    }
+
+    if (batch.status !== BATCH_STATUS.READY) {
+        throw new Error("Only an unstarted batch can be cleared by changing the model selection.");
+    }
+
+    await removeBatchState(tabId);
+    return null;
+}
+
+/**
  * Update a not-yet-started batch from the current model selection.
  * Existing selected entries are retained; deselected entries are removed.
  */
