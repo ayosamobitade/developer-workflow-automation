@@ -725,20 +725,9 @@ export async function runWorkflowBatch({
                     workflow.input.implementationPlan = plan;
                     workflow.input.automaticContinuation = true;
 
-                    const existingModel = plan.existingFiles["create_model.model"];
-
-                    if (existingModel) {
-                        workflow = await seedExistingModel({
-                            workflow,
-                            modelPath: model.path,
-                            readFile: async () => ({
-                                content: existingModel.content,
-                            }),
-                        });
-                        workflow.input.existingFiles = plan.existingFiles;
-                        workflow.input.implementationPlan = plan;
-                        workflow.input.automaticContinuation = true;
-                    }
+                    // Existing model content remains an input to create_model.
+                    // The task decides whether it needs completion or can be preserved.
+                    workflow.input.automaticContinuation = true;
 
                     model.workflow = structuredClone(workflow);
                     await persistBatch(
