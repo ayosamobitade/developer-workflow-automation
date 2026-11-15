@@ -1,105 +1,55 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertCircle, FolderTree, HardDrive, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
 import DjangoModelWorkflowPanel from "./features/workflows/components/DjangoModelWorkflowPanel";
-
-import {
-    FolderTree,
-    FileText,
-    Settings,
-    ListOrdered,
-    ClipboardCopy,
-    CheckCircle2,
-    SkipForward,
-    RotateCcw,
-    AlertCircle,
-    Circle,
-    Send,
-    Zap,
-    HardDrive,
-    RefreshCw,
-    Save,
-    ShieldCheck,
-    Unplug,
-} from "lucide-react";
-
-import { parseFileTree } from "./features/file-tree/treeParser";
 import { generateFileTree } from "./features/file-tree/treeGenerator";
-import { generatePrompt } from "./features/prompt-queue/promptGenerator";
-
-import {
-    loadQueue,
-    saveQueue,
-} from "./features/prompt-queue/queueStorage";
-
-import {
-    readProjectDirectory,
-} from "./features/local-project/projectReader";
-
-import {
-    loadProject,
-    saveProject,
-    clearProject,
-} from "./features/local-project/projectStorage";
-
-
-const DEFAULT_TEMPLATE =
-    "Please, give me the comprehensive model file for {{file}}.";
-
-const DEFAULT_STATE = {
-    treeText: "",
-    template: DEFAULT_TEMPLATE,
-    files: [],
-    currentIndex: 0,
-    autoSend: false,
-    includeSourceContext: false,
-};
 
 const NATIVE_MESSAGE_TYPE = "PROMPTFLOW_NATIVE";
+const WORKSPACE_STORAGE_PREFIX = "promptflow_native_workspace_";
+const SESSION_RENEWAL_BUFFER_SECONDS = 60;
 
+async function sendNativeRequest(request) {
+    if (!globalThis.browser?.runtime) {
+        throw new Error("Firefox extension runtime is unavailable.");
+    }
 
-/*
- * CHATGPT COMMUNICATION
- */
+    const response = await browser.runtime.sendMessage({
+        type: NATIVE_MESSAGE_TYPE,
+        request,
+    });
 
-async function sendPromptToChatGPT(
-    prompt,
-    shouldSend = false,
-    waitForResponse = false,
-    timeout,
-    targetTabId = null
-) {
+    if (!response) {
+        throw new Error("The native host returned an empty response.");
+    }
+
+    if (!response.ok) {
+        throw new Error(response.error || "Native messaging request failed.");
+    }
+
+    return response;
+}
+
+async function sendPromptToChatGPT(prompt, shouldSend = true, waitForResponse = false, timeout, targetTabId = null) {
     if (!prompt?.trim()) {
         throw new Error("There is no prompt to send.");
     }
 
     if (!globalThis.browser?.tabs) {
-        throw new Error(
-            "Firefox extension APIs are unavailable. Open PromptFlow from the Firefox sidebar."
-        );
+        throw new Error("Firefox extension APIs are unavailable. Open PromptFlow from the Firefox sidebar.");
     }
 
     if (waitForResponse && !shouldSend) {
-        throw new Error(
-            "Response monitoring requires the prompt to be sent."
-        );
+        throw new Error("Response monitoring requires the prompt to be sent.");
     }
 
     let targetTab;
-
     if (targetTabId !== null && targetTabId !== undefined) {
         try {
             targetTab = await browser.tabs.get(targetTabId);
         } catch {
-            throw new Error(
-                "The ChatGPT tab used by this workflow is no longer available."
-            );
+            throw new Error("The ChatGPT tab used by this workflow is no longer available.");
         }
     } else {
-        const tabs = await browser.tabs.query({
-            active: true,
-            currentWindow: true,
-        });
-
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
         targetTab = tabs[0];
     }
 
@@ -112,9 +62,7 @@ async function sendPromptToChatGPT(
         targetTab.url?.startsWith("https://chat.openai.com/");
 
     if (!isChatGPT) {
-        throw new Error(
-            "The target tab is not a ChatGPT tab. Open ChatGPT in the selected tab before continuing."
-        );
+        throw new Error("The selected tab is not a ChatGPT tab. Open ChatGPT before starting the workflow.");
     }
 
     const message = {
@@ -123,7 +71,6 @@ async function sendPromptToChatGPT(
             : shouldSend
                 ? "PROMPTFLOW_INSERT_AND_SEND"
                 : "PROMPTFLOW_INSERT_PROMPT",
-
         prompt,
     };
 
@@ -131,2151 +78,576 @@ async function sendPromptToChatGPT(
         message.timeout = timeout;
     }
 
-    const response = await browser.tabs.sendMessage(
-        targetTab.id,
-        message
-    );
-
+    const response = await browser.tabs.sendMessage(targetTab.id, message);
     if (!response?.success) {
-        throw new Error(
-            response?.error || "Unable to process the prompt."
-        );
+        throw new Error(response?.error || "Unable to process the prompt.");
     }
 
-    if (
-        waitForResponse &&
-        typeof response.response?.text !== "string"
-    ) {
-        throw new Error(
-            "ChatGPT finished, but PromptFlow did not receive a valid response."
-        );
+    if (waitForResponse && typeof response.response?.text !== "string") {
+        throw new Error("ChatGPT finished, but PromptFlow did not receive a valid response.");
     }
 
     return response;
 }
 
-// async function sendPromptToChatGPT(
-//     prompt,
-//     shouldSend = false,
-//     waitForResponse = false,
-//     timeout
-// ) {
-//     if (!prompt?.trim()) {
-//         throw new Error("There is no prompt to send.");
-//     }
-
-//     if (!globalThis.browser?.tabs) {
-//         throw new Error(
-//             "Firefox extension APIs are unavailable. Open PromptFlow from the Firefox sidebar."
-//         );
-//     }
-
-//     if (waitForResponse && !shouldSend) {
-//         throw new Error(
-//             "Response monitoring requires the prompt to be sent."
-//         );
-//     }
-
-//     const tabs = await browser.tabs.query({
-//         active: true,
-//         currentWindow: true,
-//     });
-
-//     const activeTab = tabs[0];
-
-//     if (!activeTab?.id) {
-//         throw new Error("No active browser tab was found.");
-//     }
-
-//     const isChatGPT =
-//         activeTab.url?.startsWith("https://chatgpt.com/") ||
-//         activeTab.url?.startsWith("https://chat.openai.com/");
-
-//     if (!isChatGPT) {
-//         throw new Error(
-//             "Open ChatGPT in the active tab before using this action."
-//         );
-//     }
-
-//     const message = {
-//         type: waitForResponse
-//             ? "PROMPTFLOW_INSERT_AND_WAIT"
-//             : shouldSend
-//                 ? "PROMPTFLOW_INSERT_AND_SEND"
-//                 : "PROMPTFLOW_INSERT_PROMPT",
-
-//         prompt,
-//     };
-
-//     if (waitForResponse && timeout) {
-//         message.timeout = timeout;
-//     }
-
-//     const response = await browser.tabs.sendMessage(
-//         activeTab.id,
-//         message
-//     );
-
-//     if (!response?.success) {
-//         throw new Error(
-//             response?.error || "Unable to process the prompt."
-//         );
-//     }
-
-//     if (
-//         waitForResponse &&
-//         typeof response.response?.text !== "string"
-//     ) {
-//         throw new Error(
-//             "ChatGPT finished, but PromptFlow did not receive a valid response."
-//         );
-//     }
-
-//     return response;
-// }
-
-
-/*
- * NATIVE MESSAGING
- *
- * All native host requests go through background.js.
- */
-
-async function sendNativeRequest(request) {
-    if (!globalThis.browser?.runtime) {
-        throw new Error(
-            "Firefox extension runtime is unavailable."
-        );
-    }
-
-    const response = await browser.runtime.sendMessage({
-        type: NATIVE_MESSAGE_TYPE,
-        request,
-    });
-
-    if (!response) {
-        throw new Error(
-            "The native host returned an empty response."
-        );
-    }
-
-    if (!response.ok) {
-        throw new Error(
-            response.error || "Native messaging request failed."
-        );
-    }
-
-    return response;
+function isSessionValid(token, expiresAt) {
+    return Boolean(token) &&
+        Number.isFinite(expiresAt) &&
+        Date.now() / 1000 < expiresAt - SESSION_RENEWAL_BUFFER_SECONDS;
 }
-
-
-async function testNativeHost() {
-    return sendNativeRequest({
-        action: "ping",
-    });
-}
-
-
-async function getNativeProjects() {
-    const response = await sendNativeRequest({
-        action: "list_projects",
-    });
-
-    return response.projects || [];
-}
-
-
-async function createNativeAuthorizationSession(
-    projectId,
-    directory = "",
-    permission = "read",
-    confirmed = false
-) {
-    return sendNativeRequest({
-        action: "create_session",
-        project_id: projectId,
-        directory,
-        permission,
-        confirmed,
-    });
-}
-
-
-async function revokeNativeAuthorizationSession(token) {
-    if (!token) {
-        return {
-            ok: true,
-            revoked: false,
-        };
-    }
-
-    return sendNativeRequest({
-        action: "revoke_session",
-        token,
-    });
-}
-
-
-async function getNativeProjectFiles(
-    projectId,
-    directory = "",
-    token
-) {
-    const response = await sendNativeRequest({
-        action: "list_files",
-        project_id: projectId,
-        directory,
-        token,
-    });
-
-    return response.files || [];
-}
-
-
-async function getNativeProjectDirectories(
-    projectId,
-    directory = "",
-    token
-) {
-    const response = await sendNativeRequest({
-        action: "list_directories",
-        project_id: projectId,
-        directory,
-        token,
-    });
-
-    return response.directories || [];
-}
-
-
-async function readNativeProjectFile(
-    projectId,
-    path,
-    directory = "",
-    token
-) {
-    return sendNativeRequest({
-        action: "read_file",
-        project_id: projectId,
-        path,
-        directory,
-        token,
-    });
-}
-
-
-async function writeNativeProjectFile(
-    projectId,
-    path,
-    content,
-    directory = "",
-    token
-) {
-    return sendNativeRequest({
-        action: "write_file",
-        project_id: projectId,
-        path,
-        content,
-        directory,
-        token,
-    });
-}
-
-
-function buildNativeProjectWorkspace(filePaths, projectName) {
-    if (!Array.isArray(filePaths) || filePaths.length === 0) {
-        return {
-            tree: "",
-            files: [],
-        };
-    }
-
-    const entries = filePaths.map((path) => ({
-        path,
-        name: path.split("/").pop(),
-    }));
-
-    const tree = generateFileTree(entries, projectName);
-
-    return {
-        tree,
-        files: parseFileTree(tree),
-    };
-}
-
-/*
- * APP
- */
 
 function App() {
-    // ---------------------------------------------------------
-    // WORKSPACE STATE
-    // ---------------------------------------------------------
-
-    const [treeText, setTreeText] = useState(
-        DEFAULT_STATE.treeText
-    );
-
-    const [template, setTemplate] = useState(
-        DEFAULT_STATE.template
-    );
-
-    const [files, setFiles] = useState(
-        DEFAULT_STATE.files
-    );
-
-    const [currentIndex, setCurrentIndex] = useState(
-        DEFAULT_STATE.currentIndex
-    );
-
-    const [autoSend, setAutoSend] = useState(
-        DEFAULT_STATE.autoSend
-    );
-
-    const [includeSourceContext, setIncludeSourceContext] =
-        useState(DEFAULT_STATE.includeSourceContext);
-
-
-    // ---------------------------------------------------------
-    // BROWSER TAB STATE
-    // ---------------------------------------------------------
-
     const [activeTabId, setActiveTabId] = useState(null);
-    const [loadedTabId, setLoadedTabId] = useState(null);
-
-    const isWorkspaceReady =
-        activeTabId !== null && loadedTabId === activeTabId;
-
-    // ---------------------------------------------------------
-    // CHATGPT EXECUTION STATE
-    // ---------------------------------------------------------
-
-    const [isSending, setIsSending] = useState(false);
-
-
-    // ---------------------------------------------------------
-    // BROWSER-READ PROJECT STATE
-    // ---------------------------------------------------------
-
-    const [projectName, setProjectName] = useState("");
-    const [projectFiles, setProjectFiles] = useState([]);
-    const [isReadingProject, setIsReadingProject] = useState(false);
-
-    const folderInputRef = useRef(null);
-
-
-    // ---------------------------------------------------------
-    // NATIVE PROJECT STATE
-    // ---------------------------------------------------------
-    const nativeSessionsRef = useRef(new Map());
-
+    const [workspaceReady, setWorkspaceReady] = useState(false);
     const [nativeConnected, setNativeConnected] = useState(false);
     const [nativeVersion, setNativeVersion] = useState("");
-
     const [nativeProjects, setNativeProjects] = useState([]);
     const [nativeProjectId, setNativeProjectId] = useState("");
     const [nativeProjectName, setNativeProjectName] = useState("");
-
     const [nativeProjectFiles, setNativeProjectFiles] = useState([]);
-
-    const [nativeProjectAllFiles, setNativeProjectAllFiles] =
-        useState([]);
-
-    const [nativeProjectDirectories, setNativeProjectDirectories] =
-    useState([]);
-
-    const [nativeWorkingDirectory, setNativeWorkingDirectory] =
-        useState("");
-
-    const [isChangingWorkingDirectory, setIsChangingWorkingDirectory] =
-        useState(false);
-
-    const [isConnectingNative, setIsConnectingNative] = useState(false);
-    const [isLoadingNativeFiles, setIsLoadingNativeFiles] = useState(false);
-    const [isReadingNativeFile, setIsReadingNativeFile] = useState(false);
-    const [isWritingNativeFile, setIsWritingNativeFile] = useState(false);
-
-    const [nativeSourceContent, setNativeSourceContent] = useState("");
-    const [nativeSourcePath, setNativeSourcePath] = useState("");
-
-    const [nativeWriteContent, setNativeWriteContent] = useState("");
-    const [nativeWritePath, setNativeWritePath] = useState("");
-
-    const [showNativeWriteEditor, setShowNativeWriteEditor] =
-        useState(false);
-
-    const [nativeError, setNativeError] = useState("");
-
-
-    // ---------------------------------------------------------
-    // NOTIFICATIONS
-    // ---------------------------------------------------------
-
+    const [nativeWorkingDirectory, setNativeWorkingDirectory] = useState("");
+    const [nativeProjectDirectories, setNativeProjectDirectories] = useState([]);
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [isChangingDirectory, setIsChangingDirectory] = useState(false);
     const [error, setError] = useState("");
-    const [message, setMessage] = useState("");
+    const [nativeError, setNativeError] = useState("");
+    const [notice, setNotice] = useState("");
+    const sessionsRef = useRef(new Map());
 
-// ---------------------------------------------------------
-// NATIVE AUTHORIZATION SESSION MANAGEMENT
-// ---------------------------------------------------------
+    const createSession = useCallback(async (projectId, directory = "", permission = "read", confirmed = false) => {
+        return sendNativeRequest({
+            action: "create_session",
+            project_id: projectId,
+            directory,
+            permission,
+            confirmed,
+        });
+    }, []);
 
-const SESSION_RENEWAL_BUFFER_SECONDS = 60;
+    const revokeSession = useCallback(async (token) => {
+        if (!token) return;
+        await sendNativeRequest({ action: "revoke_session", token });
+    }, []);
 
+    const getSessionRecord = useCallback((tabId, projectId) => {
+        if (tabId === null || tabId === undefined) {
+            throw new Error("An active browser tab is required.");
+        }
 
-function isNativeSessionValid(token, expiresAt) {
-    if (!token || !Number.isFinite(expiresAt)) {
-        return false;
-    }
+        let record = sessionsRef.current.get(tabId);
+        if (!record || record.projectId !== projectId) {
+            record = {
+                projectId,
+                rootReadToken: null,
+                rootReadExpiresAt: null,
+                readToken: null,
+                readExpiresAt: null,
+                readDirectory: null,
+                writeToken: null,
+                writeExpiresAt: null,
+                writeDirectory: null,
+            };
+            sessionsRef.current.set(tabId, record);
+        }
+        return record;
+    }, []);
 
-    const currentTime = Date.now() / 1000;
-
-    return (
-        currentTime <
-        expiresAt - SESSION_RENEWAL_BUFFER_SECONDS
-    );
-}
-
-
-function getNativeSessionRecord(tabId, projectId) {
-    if (tabId === null || tabId === undefined) {
-        throw new Error("An active browser tab is required.");
-    }
-
-    const sessions = nativeSessionsRef.current;
-
-    let record = sessions.get(tabId);
-
-    if (!record || record.projectId !== projectId) {
-        record = {
-            projectId,
-
-            rootReadToken: null,
-            rootReadExpiresAt: null,
-
-            readToken: null,
-            readExpiresAt: null,
-            readDirectory: null,
-
-            writeToken: null,
-            writeExpiresAt: null,
-            writeDirectory: null,
-        };
-
-        sessions.set(tabId, record);
-    }
-
-    return record;
-}
-
-
-async function revokeNativeSessionTokens(record) {
-    if (!record) return;
-
-    const tokens = [
-        record.rootReadToken,
-        record.readToken,
-        record.writeToken,
-    ];
-
-    const uniqueTokens = [
-        ...new Set(tokens.filter(Boolean)),
-    ];
-
-    await Promise.allSettled(
-        uniqueTokens.map((token) =>
-            revokeNativeAuthorizationSession(token)
-        )
-    );
-}
-
-
-async function ensureNativeReadSession(
-    projectId,
-    directory = "",
-    tabId = activeTabId
-) {
-    if (!projectId) {
-        throw new Error("A registered project is required.");
-    }
-
-    const sessions = nativeSessionsRef.current;
-
-    let record = sessions.get(tabId);
-
-    // Revoke sessions belonging to a previously connected project.
-    if (record && record.projectId !== projectId) {
-        await revokeNativeSessionTokens(record);
-
-        sessions.delete(tabId);
-
-        record = null;
-    }
-
-    record = getNativeSessionRecord(tabId, projectId);
-
-    // -----------------------------------------------------
-    // ROOT READ SESSION
-    // -----------------------------------------------------
-
-    if (
-        !isNativeSessionValid(
+    const revokeTabSessions = useCallback(async (tabId) => {
+        const record = sessionsRef.current.get(tabId);
+        if (!record) return;
+        sessionsRef.current.delete(tabId);
+        const tokens = [...new Set([
             record.rootReadToken,
-            record.rootReadExpiresAt
-        )
-    ) {
-        const previousRootToken = record.rootReadToken;
+            record.readToken,
+            record.writeToken,
+        ].filter(Boolean))];
+        await Promise.allSettled(tokens.map(revokeSession));
+    }, [revokeSession]);
 
-        const rootSession = await createNativeAuthorizationSession(
-            projectId,
-            "",
-            "read"
-        );
+    const ensureReadSession = useCallback(async (projectId, directory = "", tabId = activeTabId) => {
+        if (!projectId) throw new Error("A registered project is required.");
 
-        record.rootReadToken = rootSession.token;
-        record.rootReadExpiresAt = rootSession.expires_at;
+        let record = sessionsRef.current.get(tabId);
+        if (record && record.projectId !== projectId) {
+            await revokeTabSessions(tabId);
+            record = null;
+        }
+        record = getSessionRecord(tabId, projectId);
 
-        // Remove references to the previous root token.
-        if (record.readToken === previousRootToken) {
-            record.readToken = null;
-            record.readExpiresAt = null;
-            record.readDirectory = null;
+        if (!isSessionValid(record.rootReadToken, record.rootReadExpiresAt)) {
+            const previousRootToken = record.rootReadToken;
+            const rootSession = await createSession(projectId, "", "read");
+            record.rootReadToken = rootSession.token;
+            record.rootReadExpiresAt = rootSession.expires_at;
+
+            if (record.readToken === previousRootToken) {
+                record.readToken = null;
+                record.readExpiresAt = null;
+                record.readDirectory = null;
+            }
+            if (previousRootToken) await revokeSession(previousRootToken);
         }
 
-        if (previousRootToken) {
-            await revokeNativeAuthorizationSession(
-                previousRootToken
-            );
+        if (directory === "") {
+            const previousReadToken = record.readToken;
+            const previousWriteToken = record.writeToken;
+            record.readToken = record.rootReadToken;
+            record.readExpiresAt = record.rootReadExpiresAt;
+            record.readDirectory = "";
+            record.writeToken = null;
+            record.writeExpiresAt = null;
+            record.writeDirectory = null;
+
+            const tokens = [...new Set([
+                previousReadToken !== record.rootReadToken ? previousReadToken : null,
+                previousWriteToken,
+            ].filter(Boolean))];
+            await Promise.allSettled(tokens.map(revokeSession));
+            return record.readToken;
         }
-    }
 
-    // -----------------------------------------------------
-    // PROJECT ROOT DIRECTORY
-    // -----------------------------------------------------
+        if (
+            record.readDirectory === directory &&
+            isSessionValid(record.readToken, record.readExpiresAt)
+        ) {
+            return record.readToken;
+        }
 
-    if (directory === "") {
         const previousReadToken = record.readToken;
         const previousWriteToken = record.writeToken;
-
-        record.readToken = record.rootReadToken;
-        record.readExpiresAt = record.rootReadExpiresAt;
-        record.readDirectory = "";
-
+        const scopedSession = await createSession(projectId, directory, "read");
+        record.readToken = scopedSession.token;
+        record.readExpiresAt = scopedSession.expires_at;
+        record.readDirectory = directory;
         record.writeToken = null;
         record.writeExpiresAt = null;
         record.writeDirectory = null;
 
-        const tokensToRevoke = [
-            previousReadToken !== record.rootReadToken
-                ? previousReadToken
-                : null,
-
+        const tokens = [...new Set([
+            previousReadToken !== record.rootReadToken ? previousReadToken : null,
             previousWriteToken,
-        ].filter(Boolean);
-
-        await Promise.allSettled(
-            [...new Set(tokensToRevoke)].map((token) =>
-                revokeNativeAuthorizationSession(token)
-            )
-        );
-
+        ].filter(Boolean))];
+        await Promise.allSettled(tokens.map(revokeSession));
         return record.readToken;
-    }
+    }, [activeTabId, createSession, getSessionRecord, revokeSession, revokeTabSessions]);
 
-    // -----------------------------------------------------
-    // WORKING DIRECTORY READ SESSION
-    // -----------------------------------------------------
+    const ensureWriteSession = useCallback(async (projectId, directory = nativeWorkingDirectory, tabId = activeTabId) => {
+        await ensureReadSession(projectId, directory, tabId);
+        const record = getSessionRecord(tabId, projectId);
 
-    if (
-        record.readDirectory === directory &&
-        isNativeSessionValid(
-            record.readToken,
-            record.readExpiresAt
-        )
-    ) {
-        return record.readToken;
-    }
+        if (
+            record.writeDirectory === directory &&
+            isSessionValid(record.writeToken, record.writeExpiresAt)
+        ) {
+            return record.writeToken;
+        }
 
-    const previousReadToken = record.readToken;
-    const previousWriteToken = record.writeToken;
+        if (record.writeToken) {
+            await revokeSession(record.writeToken);
+            record.writeToken = null;
+            record.writeExpiresAt = null;
+            record.writeDirectory = null;
+        }
 
-    const scopedSession = await createNativeAuthorizationSession(
-        projectId,
-        directory,
-        "read"
-    );
-
-    record.readToken = scopedSession.token;
-    record.readExpiresAt = scopedSession.expires_at;
-    record.readDirectory = directory;
-
-    // A directory change invalidates the previous write authorization.
-    record.writeToken = null;
-    record.writeExpiresAt = null;
-    record.writeDirectory = null;
-
-    const tokensToRevoke = [
-        previousReadToken !== record.rootReadToken
-            ? previousReadToken
-            : null,
-
-        previousWriteToken,
-    ].filter(Boolean);
-
-    await Promise.allSettled(
-        [...new Set(tokensToRevoke)].map((token) =>
-            revokeNativeAuthorizationSession(token)
-        )
-    );
-
-    return record.readToken;
-}
-
-
-async function ensureNativeWriteSession(
-    projectId,
-    directory = nativeWorkingDirectory,
-    tabId = activeTabId
-) {
-    if (!projectId) {
-        throw new Error("A registered project is required.");
-    }
-
-    // This also handles project changes and ensures the session
-    // record belongs to the requested project.
-    await ensureNativeReadSession(
-        projectId,
-        directory,
-        tabId
-    );
-
-    const record = getNativeSessionRecord(
-        tabId,
-        projectId
-    );
-
-    // Reuse an unexpired write session for this exact directory.
-    if (
-        record.writeDirectory === directory &&
-        isNativeSessionValid(
-            record.writeToken,
-            record.writeExpiresAt
-        )
-    ) {
-        return record.writeToken;
-    }
-
-    // Revoke an expired or differently scoped write session.
-    if (record.writeToken) {
-        await revokeNativeAuthorizationSession(
-            record.writeToken
-        );
-
-        record.writeToken = null;
-        record.writeExpiresAt = null;
-        record.writeDirectory = null;
-    }
-
-    // Explicit confirmation is required for every new write session.
-    const confirmed = window.confirm(
-        [
+        const confirmed = window.confirm([
             "ENABLE LOCAL PROJECT WRITING",
             "",
             `Project: ${nativeProjectName}`,
             `Working directory: ${directory || "Project root"}`,
             "",
-            "PromptFlow will be allowed to create and update files within this directory.",
-            "Existing files will be backed up before they are overwritten.",
-            "",
+            "PromptFlow may create or update files within this directory.",
+            "Existing files are backed up before they are overwritten.",
             "This authorization expires after 8 hours or when revoked.",
             "",
             "Do you explicitly authorize local file writing?",
-        ].join("\n")
-    );
+        ].join("\n"));
 
-    if (!confirmed) {
-        throw new Error(
-            "Write authorization was not granted."
-        );
-    }
+        if (!confirmed) throw new Error("Write authorization was not granted.");
 
-    const response = await createNativeAuthorizationSession(
-        projectId,
-        directory,
-        "write",
-        true
-    );
+        const response = await createSession(projectId, directory, "write", true);
+        record.writeToken = response.token;
+        record.writeExpiresAt = response.expires_at;
+        record.writeDirectory = directory;
+        return record.writeToken;
+    }, [activeTabId, createSession, ensureReadSession, getSessionRecord, nativeProjectName, nativeWorkingDirectory, revokeSession]);
 
-    record.writeToken = response.token;
-    record.writeExpiresAt = response.expires_at;
-    record.writeDirectory = directory;
+    const getProjectFiles = useCallback(async (projectId, directory = nativeWorkingDirectory) => {
+        const token = await ensureReadSession(projectId, directory, activeTabId);
+        const response = await sendNativeRequest({
+            action: "list_files",
+            project_id: projectId,
+            directory,
+            token,
+        });
+        return response.files || [];
+    }, [activeTabId, ensureReadSession, nativeWorkingDirectory]);
 
-    return record.writeToken;
-}
+    const getProjectDirectories = useCallback(async (projectId) => {
+        const token = await ensureReadSession(projectId, "", activeTabId);
+        const response = await sendNativeRequest({
+            action: "list_directories",
+            project_id: projectId,
+            directory: "",
+            token,
+        });
+        return response.directories || [];
+    }, [activeTabId, ensureReadSession]);
 
+    const refreshProjectWorkspace = useCallback(async (projectId, projectName, directory) => {
+        const files = await getProjectFiles(projectId, directory);
+        setNativeProjectFiles(files);
+        return files;
+    }, [getProjectFiles]);
 
-async function revokeTabNativeSessions(tabId) {
-    const sessions = nativeSessionsRef.current;
+    const restoreWorkspace = useCallback(async (tabId) => {
+        setWorkspaceReady(false);
+        setError("");
+        setNotice("");
+        const key = `${WORKSPACE_STORAGE_PREFIX}${tabId}`;
+        const saved = await browser.storage.local.get(key);
+        const workspace = saved[key];
 
-    const record = sessions.get(tabId);
+        if (!workspace?.projectId) {
+            setNativeProjectId("");
+            setNativeProjectName("");
+            setNativeWorkingDirectory("");
+            setNativeProjectFiles([]);
+            setNativeProjectDirectories([]);
+            setWorkspaceReady(true);
+            return;
+        }
 
-    if (!record) return;
+        setNativeProjectId(workspace.projectId);
+        setNativeProjectName(workspace.projectName || "");
+        setNativeWorkingDirectory(workspace.workingDirectory || "");
 
-    // Remove the record immediately so it cannot be reused.
-    sessions.delete(tabId);
-
-    await revokeNativeSessionTokens(record);
-}
-
-    // ---------------------------------------------------------
-    // CURRENT QUEUE INFORMATION
-    // ---------------------------------------------------------
-
-    const currentFile = files[currentIndex] || null;
-
-    const completedCount = files.filter(
-        (file) => file.status === "completed"
-    ).length;
-
-    const skippedCount = files.filter(
-        (file) => file.status === "skipped"
-    ).length;
-
-    const processedCount = completedCount + skippedCount;
-
-    const progress = files.length
-        ? Math.round(
-            (processedCount / files.length) * 100
-        )
-        : 0;
-
-
-    // ---------------------------------------------------------
-    // NATIVE PROJECT FILE LOOKUP
-    // ---------------------------------------------------------
-
-    const currentNativeFile = currentFile
-        ? nativeProjectFiles.find(
-            (file) => file === currentFile.path
-        )
-        : null;
-
-
-    // ---------------------------------------------------------
-    // LOAD ACTIVE TAB WORKSPACE
-    // ---------------------------------------------------------
+        try {
+            const rootToken = await ensureReadSession(workspace.projectId, "", tabId);
+            const [allFilesResponse, directoryResponse] = await Promise.all([
+                sendNativeRequest({
+                    action: "list_files",
+                    project_id: workspace.projectId,
+                    directory: "",
+                    token: rootToken,
+                }),
+                sendNativeRequest({
+                    action: "list_directories",
+                    project_id: workspace.projectId,
+                    directory: "",
+                    token: rootToken,
+                }),
+            ]);
+            const scopedToken = await ensureReadSession(
+                workspace.projectId,
+                workspace.workingDirectory || "",
+                tabId
+            );
+            const scopedResponse = await sendNativeRequest({
+                action: "list_files",
+                project_id: workspace.projectId,
+                directory: workspace.workingDirectory || "",
+                token: scopedToken,
+            });
+            setNativeProjectFiles(scopedResponse.files || []);
+            setNativeProjectDirectories(directoryResponse.directories || []);
+            setNativeConnected(true);
+            setNativeVersion("");
+            setNotice(`${workspace.projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
+        } catch (restoreError) {
+            await revokeTabSessions(tabId);
+            setNativeProjectId("");
+            setNativeProjectName("");
+            setNativeWorkingDirectory("");
+            setNativeProjectFiles([]);
+            setNativeProjectDirectories([]);
+            setNativeError(restoreError.message || "Unable to restore the registered project.");
+        } finally {
+            setWorkspaceReady(true);
+        }
+    }, [ensureReadSession, revokeTabSessions]);
 
     useEffect(() => {
+        if (!globalThis.browser?.tabs || !globalThis.browser?.storage?.local) {
+            setWorkspaceReady(true);
+            return undefined;
+        }
+
         let mounted = true;
-        let requestSequence = 0;
-
-        async function loadActiveTabWorkspace(tabId) {
-            const requestId = ++requestSequence;
-
+        const activate = async (tabId) => {
             setActiveTabId(tabId);
-            setLoadedTabId(null);
+            await restoreWorkspace(tabId);
+        };
+        const onActivated = (info) => {
+            if (mounted) void activate(info.tabId);
+        };
 
-            setError("");
-            setMessage("");
-
-            const savedWorkspace = await loadQueue(tabId);
-
-            if (!mounted || requestId !== requestSequence) {
-                return;
-            }
-
-            const workspace = {
-                ...DEFAULT_STATE,
-                ...(savedWorkspace || {}),
-            };
-
-            const restoredFiles = Array.isArray(workspace.files)
-                ? workspace.files
-                : [];
-
-            const restoredIndex = Math.min(
-                Math.max(
-                    Number(workspace.currentIndex) || 0,
-                    0
-                ),
-                restoredFiles.length
-            );
-
-            setTreeText(workspace.treeText || "");
-
-            setTemplate(
-                workspace.template || DEFAULT_TEMPLATE
-            );
-
-            setFiles(restoredFiles);
-            setCurrentIndex(restoredIndex);
-
-            setAutoSend(Boolean(workspace.autoSend));
-
-            setIncludeSourceContext(
-                Boolean(workspace.includeSourceContext)
-            );
-
-            setLoadedTabId(tabId);
-        }
-
-        function handleTabActivated(activeInfo) {
-            loadActiveTabWorkspace(activeInfo.tabId)
-                .catch((err) => {
-                    if (mounted) {
-                        setError(
-                            err.message ||
-                            "Unable to load the tab workspace."
-                        );
-                    }
-                });
-        }
-
-        if (!globalThis.browser?.tabs) {
-            return () => {
-                mounted = false;
-            };
-        }
-
-        browser.tabs.onActivated.addListener(
-            handleTabActivated
-        );
-
-        browser.tabs.query({
-            active: true,
-            currentWindow: true,
-        }).then((tabs) => {
-            if (!mounted) return;
-
-            const activeTab = tabs[0];
-
-            if (activeTab?.id !== undefined) {
-                loadActiveTabWorkspace(activeTab.id)
-                    .catch((err) => {
-                        if (mounted) {
-                            setError(
-                                err.message ||
-                                "Unable to load the tab workspace."
-                            );
-                        }
-                    });
-            } else {
-                setError(
-                    "Could not identify the active browser tab."
-                );
-            }
-        }).catch((err) => {
-            if (mounted) {
-                setError(
-                    err.message ||
-                    "Unable to identify the active browser tab."
-                );
-            }
-        });
+        browser.tabs.onActivated.addListener(onActivated);
+        browser.tabs.query({ active: true, currentWindow: true })
+            .then((tabs) => {
+                if (mounted && tabs[0]?.id !== undefined) {
+                    void activate(tabs[0].id);
+                } else if (mounted) {
+                    setWorkspaceReady(true);
+                }
+            })
+            .catch(() => {
+                if (mounted) setWorkspaceReady(true);
+            });
 
         return () => {
             mounted = false;
-
-            browser.tabs.onActivated.removeListener(
-                handleTabActivated
-            );
+            browser.tabs.onActivated.removeListener(onActivated);
+            for (const tabId of sessionsRef.current.keys()) {
+                void revokeTabSessions(tabId);
+            }
         };
-    }, []);
-
-
-    // ---------------------------------------------------------
-    // RESTORE BROWSER-READ PROJECT
-    // ---------------------------------------------------------
+    }, [restoreWorkspace, revokeTabSessions]);
 
     useEffect(() => {
-        if (!isWorkspaceReady || activeTabId === null) {
+        if (!workspaceReady || activeTabId === null || !browser?.storage?.local) return;
+        const key = `${WORKSPACE_STORAGE_PREFIX}${activeTabId}`;
+        if (!nativeProjectId) {
+            void browser.storage.local.remove(key);
             return;
         }
-
-        let cancelled = false;
-
-        async function restoreProject() {
-            setProjectName("");
-            setProjectFiles([]);
-
-            try {
-                const project = await loadProject(activeTabId);
-
-                if (cancelled) return;
-
-                setProjectName(project?.name || "");
-                setProjectFiles(project?.files || []);
-            } catch (err) {
-                if (!cancelled) {
-                    setError(
-                        err.message ||
-                        "Unable to restore the local project."
-                    );
-                }
-            }
-        }
-
-        restoreProject();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [activeTabId, isWorkspaceReady]);
-
-
-    // ---------------------------------------------------------
-    // RESTORE NATIVE PROJECT WORKSPACE
-    // ---------------------------------------------------------
-
-    useEffect(() => {
-        if (!isWorkspaceReady || activeTabId === null) {
-            return;
-        }
-
-        let cancelled = false;
-
-        async function restoreNativeProject() {
-            const savedWorkspace = await loadQueue(activeTabId);
-
-            if (cancelled || !savedWorkspace) return;
-
-            if (
-                savedWorkspace.nativeProjectId &&
-                savedWorkspace.nativeProjectName
-            ) {
-                const projectId = savedWorkspace.nativeProjectId;
-                const workingDirectory =
-                    savedWorkspace.nativeWorkingDirectory || "";
-
-                setNativeProjectId(projectId);
-                setNativeProjectName(savedWorkspace.nativeProjectName);
-                setNativeWorkingDirectory(workingDirectory);
-
-                try {
- 
-                    const rootReadToken = await ensureNativeReadSession(
-                        projectId,
-                        "",
-                        activeTabId
-                    );
-
-                    const [allFiles, directories] = await Promise.all([
-                        getNativeProjectFiles(
-                            projectId,
-                            "",
-                            rootReadToken
-                        ),
-                        getNativeProjectDirectories(
-                            projectId,
-                            "",
-                            rootReadToken
-                        ),
-                    ]);
-
-                    if (cancelled) return;
-
-                    const scopedReadToken = await ensureNativeReadSession(
-                        projectId,
-                        workingDirectory,
-                        activeTabId
-                    );
-
-                    const scopedFiles = await getNativeProjectFiles(
-                        projectId,
-                        workingDirectory,
-                        scopedReadToken
-                    );
-                    if (cancelled) return;
-
-                    setNativeProjectAllFiles(allFiles);
-                    setNativeProjectDirectories(directories);
-                    setNativeProjectFiles(scopedFiles);
-
-                    const entries = scopedFiles.map((path) => ({
-                        path,
-                        name: path.split("/").pop(),
-                    }));
-
-                    const generatedTree = generateFileTree(
-                        entries,
-                        savedWorkspace.nativeProjectName
-                    );
-
-                    setTreeText(generatedTree);
-                    setFiles(parseFileTree(generatedTree));
-                    setCurrentIndex(0);
-                    
-                } catch {
-                    if (!cancelled) {
-                        await revokeTabNativeSessions(activeTabId);
-
-                        setNativeProjectFiles([]);
-                        setNativeProjectAllFiles([]);
-                        setNativeProjectId("");
-                        setNativeProjectName("");
-                        setNativeWorkingDirectory("");
-                        setNativeProjectDirectories([]);
-
-                        setNativeSourceContent("");
-                        setNativeSourcePath("");
-                    }
-                }
-        
-            }
-        }
-
-        restoreNativeProject();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [activeTabId, isWorkspaceReady]);
-
-
-    // ---------------------------------------------------------
-    // PERSIST WORKSPACE
-    // ---------------------------------------------------------
-
-    // ---------------------------------------------------------
-// PERSIST WORKSPACE
-// ---------------------------------------------------------
-
-useEffect(() => {
-        if (!isWorkspaceReady) return;
-
-        saveQueue(activeTabId, {
-            treeText,
-            template,
-            files,
-            currentIndex,
-            autoSend,
-            includeSourceContext,
-
-            nativeProjectId,
-            nativeProjectName,
-            nativeWorkingDirectory,
+        void browser.storage.local.set({
+            [key]: {
+                projectId: nativeProjectId,
+                projectName: nativeProjectName,
+                workingDirectory: nativeWorkingDirectory,
+            },
         });
-    }, [
-        activeTabId,
-        loadedTabId,
-        isWorkspaceReady,
-        treeText,
-        template,
-        files,
-        currentIndex,
-        autoSend,
-        includeSourceContext,
-        nativeProjectId,
-        nativeProjectName,
-        nativeWorkingDirectory,
-    ]);
-   
-   
+    }, [activeTabId, nativeProjectId, nativeProjectName, nativeWorkingDirectory, workspaceReady]);
 
-    // ---------------------------------------------------------
-    // TEST NATIVE HOST
-    // ---------------------------------------------------------
-
-    async function handleTestNativeHost() {
+    async function handleTestConnection() {
         setNativeError("");
         setError("");
-        setMessage("");
-
-        setIsConnectingNative(true);
-
         try {
-            const response = await testNativeHost();
-
+            const response = await sendNativeRequest({ action: "ping" });
             setNativeConnected(true);
             setNativeVersion(response.version || "");
-
-            setMessage(
-                `Native companion connected successfully. Version ${response.version || "unknown"}.`
-            );
-
+            setNotice(`Native companion connected. Version ${response.version || "unknown"}.`);
         } catch (err) {
             setNativeConnected(false);
             setNativeVersion("");
-
-            setNativeError(
-                err.message ||
-                "Unable to connect to the PromptFlow native host."
-            );
-
-        } finally {
-            setIsConnectingNative(false);
+            setNativeError(err.message || "Unable to connect to the native companion.");
         }
     }
 
-
-    // ---------------------------------------------------------
-    // LOAD REGISTERED NATIVE PROJECTS
-    // ---------------------------------------------------------
-
-    async function handleLoadNativeProjects() {
+    async function handleLoadProjects() {
+        setIsConnecting(true);
         setNativeError("");
         setError("");
-        setMessage("");
-
-        setIsConnectingNative(true);
-
         try {
-            const response = await testNativeHost();
-
+            const ping = await sendNativeRequest({ action: "ping" });
+            const response = await sendNativeRequest({ action: "list_projects" });
             setNativeConnected(true);
-            setNativeVersion(response.version || "");
-
-            const projects = await getNativeProjects();
-
-            setNativeProjects(projects);
-
-            setMessage(
-                projects.length
-                    ? `${projects.length} registered local project(s) found.`
-                    : "No registered projects found. Register a project from the terminal first."
-            );
-
+            setNativeVersion(ping.version || "");
+            setNativeProjects(response.projects || []);
+            setNotice(response.projects?.length
+                ? `${response.projects.length} registered project(s) found.`
+                : "No registered projects found. Register a project from the terminal first.");
         } catch (err) {
             setNativeConnected(false);
             setNativeProjects([]);
-
-            setNativeError(
-                err.message ||
-                "Unable to load registered native projects."
-            );
-
+            setNativeError(err.message || "Unable to load registered projects.");
         } finally {
-            setIsConnectingNative(false);
+            setIsConnecting(false);
         }
     }
 
-
-    // ---------------------------------------------------------
-    // CONNECT A NATIVE PROJECT
-    // ---------------------------------------------------------
-
-    async function handleConnectNativeProject(projectId) {
-        if (!projectId || isLoadingNativeFiles) return;
-
-        const project = nativeProjects.find(
-            (item) => item.id === projectId
-        );
-
+    async function handleConnectProject(projectId) {
+        if (!projectId || isConnecting) return;
+        const project = nativeProjects.find((item) => item.id === projectId);
         if (!project) {
             setNativeError("The selected registered project was not found.");
             return;
         }
 
-        setIsLoadingNativeFiles(true);
+        setIsConnecting(true);
         setNativeError("");
         setError("");
-        setMessage("");
-
         try {
-            const rootReadToken = await ensureNativeReadSession(
-                projectId,
-                "",
-                activeTabId
-            );
-
-            const [allFiles, directories] = await Promise.all([
-                getNativeProjectFiles(
-                    projectId,
-                    "",
-                    rootReadToken
-                ),
-                getNativeProjectDirectories(
-                    projectId,
-                    "",
-                    rootReadToken
-                ),
+            const rootToken = await ensureReadSession(projectId, "", activeTabId);
+            const [filesResponse, directoriesResponse] = await Promise.all([
+                sendNativeRequest({
+                    action: "list_files",
+                    project_id: projectId,
+                    directory: "",
+                    token: rootToken,
+                }),
+                sendNativeRequest({
+                    action: "list_directories",
+                    project_id: projectId,
+                    directory: "",
+                    token: rootToken,
+                }),
             ]);
-
-            const workspace = buildNativeProjectWorkspace(
-                allFiles,
-                project.name
-            );
-
             setNativeProjectId(projectId);
             setNativeProjectName(project.name);
-
-            setNativeProjectAllFiles(allFiles);
-            setNativeProjectDirectories(directories);
-            setNativeProjectFiles(allFiles);
             setNativeWorkingDirectory("");
-
-            setProjectName("");
-            setProjectFiles([]);
-
-            setNativeSourceContent("");
-            setNativeSourcePath("");
-
-            setTreeText(workspace.tree);
-            setFiles(workspace.files);
-            setCurrentIndex(0);
-
-            setIncludeSourceContext(false);
-
-            setMessage(
-                `${project.name} connected successfully. ${allFiles.length} files available.`
-            );
-
+            setNativeProjectFiles(filesResponse.files || []);
+            setNativeProjectDirectories(directoriesResponse.directories || []);
+            setNotice(`${project.name} connected. ${(filesResponse.files || []).length} files detected.`);
         } catch (err) {
-            setNativeError(
-                err.message || "Unable to connect the selected native project."
-            );
-
+            setNativeError(err.message || "Unable to connect the selected project.");
         } finally {
-            setIsLoadingNativeFiles(false);
+            setIsConnecting(false);
         }
     }
 
-
-    async function handleChangeNativeWorkingDirectory(directory) {
-        if (
-            !nativeProjectId ||
-            directory === nativeWorkingDirectory ||
-            isChangingWorkingDirectory
-        ) {
-            return;
-        }
-
-        setIsChangingWorkingDirectory(true);
+    async function handleChangeWorkingDirectory(directory) {
+        if (!nativeProjectId || directory === nativeWorkingDirectory || isChangingDirectory) return;
+        setIsChangingDirectory(true);
         setNativeError("");
-        setError("");
-        setMessage("");
-
         try {
-            const scopedReadToken = await ensureNativeReadSession(
-                nativeProjectId,
-                directory,
-                activeTabId
-            );
-
-            const scopedFiles = await getNativeProjectFiles(
-                nativeProjectId,
-                directory,
-                scopedReadToken
-            );
-
-            const workspace = buildNativeProjectWorkspace(
-                scopedFiles,
-                nativeProjectName
-            );
-
+            const files = await getProjectFiles(nativeProjectId, directory);
             setNativeWorkingDirectory(directory);
-            setNativeProjectFiles(scopedFiles);
-
-            setTreeText(workspace.tree);
-            setFiles(workspace.files);
-            setCurrentIndex(0);
-
-            setNativeSourceContent("");
-            setNativeSourcePath("");
-
-            setMessage(
-                directory
-                    ? `Working directory changed to ${directory}. ${scopedFiles.length} files available.`
-                    : `Working directory changed to project root. ${scopedFiles.length} files available.`
-            );
-
+            setNativeProjectFiles(files);
+            setNotice(`Working directory changed to ${directory || "project root"}. ${files.length} files detected.`);
         } catch (err) {
-            setNativeError(
-                err.message || "Unable to change the working directory."
-            );
-
+            setNativeError(err.message || "Unable to change the working directory.");
         } finally {
-            setIsChangingWorkingDirectory(false);
+            setIsChangingDirectory(false);
         }
     }
-    // ---------------------------------------------------------
-    // READ CURRENT NATIVE FILE
-    // ---------------------------------------------------------
 
-    async function handleReadNativeFile(path = currentFile?.path) {
-        if (!nativeProjectId || !path) {
-            throw new Error(
-                "Connect a native project and select a file first."
-            );
-        }
-
-        setIsReadingNativeFile(true);
+    async function handleDisconnectProject() {
+        if (!nativeProjectId) return;
+        if (!window.confirm("Disconnect this project from PromptFlow? The registered project and its files will not be deleted.")) return;
+        await revokeTabSessions(activeTabId);
+        setNativeProjectId("");
+        setNativeProjectName("");
+        setNativeWorkingDirectory("");
+        setNativeProjectFiles([]);
+        setNativeProjectDirectories([]);
+        setNotice("Native project disconnected.");
         setNativeError("");
-
-        try {
-
-            const readToken = await ensureNativeReadSession(
-                nativeProjectId,
-                nativeWorkingDirectory,
-                activeTabId
-            );
-
-            const response = await readNativeProjectFile(
-                nativeProjectId,
-                path,
-                nativeWorkingDirectory,
-                readToken
-            );
-
-            setNativeSourcePath(path);
-            setNativeSourceContent(response.content || "");
-
-            return response;
-
-        } catch (err) {
-            setNativeSourceContent("");
-            setNativeSourcePath("");
-
-            setNativeError(
-                err.message ||
-                "Unable to read the selected project file."
-            );
-
-            throw err;
-
-        } finally {
-            setIsReadingNativeFile(false);
-        }
     }
 
+    const readNativeProjectFile = useCallback(async (projectId, path) => {
+        const token = await ensureReadSession(projectId, nativeWorkingDirectory, activeTabId);
+        return sendNativeRequest({
+            action: "read_file",
+            project_id: projectId,
+            path,
+            directory: nativeWorkingDirectory,
+            token,
+        });
+    }, [activeTabId, ensureReadSession, nativeWorkingDirectory]);
 
-    // ---------------------------------------------------------
-    // READ NATIVE SOURCE WHEN SOURCE CONTEXT IS ENABLED
-    // ---------------------------------------------------------
+    const writeNativeProjectFile = useCallback(async (projectId, path, content) => {
+        const token = await ensureWriteSession(projectId, nativeWorkingDirectory, activeTabId);
+        return sendNativeRequest({
+            action: "write_file",
+            project_id: projectId,
+            path,
+            content,
+            directory: nativeWorkingDirectory,
+            token,
+        });
+    }, [activeTabId, ensureWriteSession, nativeWorkingDirectory]);
 
-    useEffect(() => {
-        if (
-            !isWorkspaceReady ||
-            !nativeProjectId ||
-            !currentFile ||
-            !includeSourceContext ||
-            !currentNativeFile
-        ) {
-            return;
-        }
+    const getWorkflowAuthorization = useCallback(async () => {
+        const readToken = await ensureReadSession(nativeProjectId, nativeWorkingDirectory, activeTabId);
+        const writeToken = await ensureWriteSession(nativeProjectId, nativeWorkingDirectory, activeTabId);
+        return { readToken, writeToken };
+    }, [activeTabId, ensureReadSession, ensureWriteSession, nativeProjectId, nativeWorkingDirectory]);
 
-        let cancelled = false;
+    const ensureWriteAuthorization = useCallback(() => {
+        return ensureWriteSession(nativeProjectId, nativeWorkingDirectory, activeTabId);
+    }, [activeTabId, ensureWriteSession, nativeProjectId, nativeWorkingDirectory]);
 
-        async function loadCurrentNativeSource() {
-            try {
-       
-                const readToken = await ensureNativeReadSession(
-                    nativeProjectId,
-                    nativeWorkingDirectory,
-                    activeTabId
-                );
-
-                const response = await readNativeProjectFile(
-                    nativeProjectId,
-                    currentFile.path,
-                    nativeWorkingDirectory,
-                    readToken
-                );
-
-                if (cancelled) return;
-
-                setNativeSourcePath(currentFile.path);
-                setNativeSourceContent(response.content || "");
-
-            } catch (err) {
-                if (!cancelled) {
-                    setNativeSourceContent("");
-                    setNativeSourcePath("");
-
-                    setNativeError(
-                        err.message ||
-                        "Unable to read the current native project file."
-                    );
-                }
-            }
-        }
-
-        loadCurrentNativeSource();
-
-        return () => {
-            cancelled = true;
-        };
-    
-    }, [
-        isWorkspaceReady,
-        nativeProjectId,
-        nativeWorkingDirectory,
-        currentFile,
-        includeSourceContext,
-        currentNativeFile,
-    ]);
-
-    // ---------------------------------------------------------
-    // DISCONNECT NATIVE PROJECT
-    // ---------------------------------------------------------
-
-    async function handleDisconnectNativeProject() {
-    if (!nativeProjectId) return;
-
-    const confirmed = window.confirm(
-        "Disconnect this native project from the current tab? The registered project and its files will not be deleted."
-    );
-
-    if (!confirmed) return;
-    await revokeTabNativeSessions(activeTabId);
-
-    setNativeProjectId("");
-    setNativeProjectName("");
-    setNativeProjectFiles([]);
-    setNativeProjectAllFiles([]);
-    setNativeWorkingDirectory("");
-
-    setNativeProjectDirectories([]);
-
-    setNativeSourceContent("");
-    setNativeSourcePath("");
-
-    setNativeWritePath("");
-    setNativeWriteContent("");
-    setShowNativeWriteEditor(false);
-
-    setIncludeSourceContext(false);
-
-    setMessage("Native project disconnected.");
-    setNativeError("");
-}
-
-    // ---------------------------------------------------------
-    // BROWSER PROJECT SOURCE LOOKUP
-    // ---------------------------------------------------------
-
-    const currentProjectFile = currentFile
-        ? projectFiles.find(
-            (file) => file.path === currentFile.path
+    const treeText = nativeProjectFiles.length
+        ? generateFileTree(
+            nativeProjectFiles.map((path) => ({ path, name: path.split("/").pop() })),
+            nativeProjectName
         )
-        : null;
+        : "";
 
-
-    // ---------------------------------------------------------
-    // GENERATE CURRENT PROMPT
-    // ---------------------------------------------------------
-
-    const currentPrompt = useMemo(() => {
-        if (!currentFile) return "";
-
-        try {
-            const sourceContent = nativeProjectId
-                ? (
-                    nativeSourcePath === currentFile.path
-                        ? nativeSourceContent
-                        : ""
-                )
-                : (
-                    currentProjectFile?.content || ""
-                );
-
-            return generatePrompt({
-                tree: treeText,
-                template,
-                file: currentFile,
-
-                sourceContent:
-                    includeSourceContext
-                        ? sourceContent
-                        : "",
-            });
-
-        } catch {
-            return "";
-        }
-    }, [
-        treeText,
-        template,
-        currentFile,
-        currentProjectFile,
-        includeSourceContext,
-        nativeProjectId,
-        nativeSourcePath,
-        nativeSourceContent,
-    ]);
-
-
-    // ---------------------------------------------------------
-    // PARSE MANUAL FILE TREE
-    // ---------------------------------------------------------
-
-    function handleParseTree() {
-        if (!isWorkspaceReady) return;
-
-        setError("");
-        setMessage("");
-
-        try {
-            const parsedFiles = parseFileTree(treeText);
-
-            // Revoke native authorization when switching to a manual file tree.
-            void revokeTabNativeSessions(activeTabId);
-
-            setFiles(parsedFiles);
-            setCurrentIndex(0);
-
-            setNativeProjectId("");
-            setNativeProjectName("");
-            setNativeProjectFiles([]);
-
-            setNativeSourceContent("");
-            setNativeSourcePath("");
-
-            setNativeProjectAllFiles([]);
-            setNativeWorkingDirectory("");
-
-            setMessage(
-                `Successfully added ${parsedFiles.length} files to this tab's queue.`
-            );
-
-        } catch (err) {
-            setError(err.message);
-        }
-    }
-
-
-
-    // ---------------------------------------------------------
-    // READ BROWSER PROJECT DIRECTORY
-    // ---------------------------------------------------------
-
-    async function handleProjectDirectorySelection(event) {
-        const selectedFiles = event.target.files;
-
-        if (!selectedFiles?.length || !isWorkspaceReady) {
-            return;
-        }
-
-        setIsReadingProject(true);
-        setError("");
-        setMessage("");
-
-        try {
-            const project = await readProjectDirectory(
-                selectedFiles
-            );
-
-            await saveProject(activeTabId, project);
-
-            const generatedTree = generateFileTree(
-                project.files,
-                project.name
-            );
-
-            const parsedFiles = parseFileTree(
-                generatedTree
-            );
-
-            // Revoke native authorization when switching to a browser-read project.
-            await revokeTabNativeSessions(activeTabId);
-
-
-            setProjectName(project.name);
-            setProjectFiles(project.files);
-
-            setNativeProjectId("");
-            setNativeProjectName("");
-            setNativeProjectFiles([]);
-
-            setNativeProjectAllFiles([]);
-            setNativeWorkingDirectory("");
-
-            setNativeSourceContent("");
-            setNativeSourcePath("");
-
-            setTreeText(generatedTree);
-            setFiles(parsedFiles);
-            setCurrentIndex(0);
-
-            setMessage(
-                `${project.name} connected. ${project.files.length} source files read successfully.`
-            );
-
-        } catch (err) {
-            setError(
-                err.message ||
-                "Unable to read the selected project."
-            );
-
-        } finally {
-            setIsReadingProject(false);
-
-            event.target.value = "";
-        }
-    }
-
-
-    // ---------------------------------------------------------
-    // DISCONNECT BROWSER PROJECT
-    // ---------------------------------------------------------
-
-    async function handleClearProject() {
-        if (!projectName || !isWorkspaceReady) return;
-
-        const confirmed = window.confirm(
-            "Disconnect this project and remove its locally stored source contents?"
+    if (!globalThis.browser?.tabs) {
+        return (
+            <main className="flex min-h-screen items-center justify-center bg-slate-50 p-5 text-sm text-red-600">
+                Firefox extension APIs are unavailable. Open PromptFlow from the Firefox sidebar.
+            </main>
         );
-
-        if (!confirmed) return;
-
-        try {
-            await clearProject(activeTabId);
-
-            setProjectName("");
-            setProjectFiles([]);
-
-            setIncludeSourceContext(false);
-
-            setMessage("Local project disconnected.");
-            setError("");
-
-        } catch (err) {
-            setError(
-                err.message ||
-                "Unable to disconnect the project."
-            );
-        }
     }
-
-
-    // ---------------------------------------------------------
-    // COPY CURRENT PROMPT
-    // ---------------------------------------------------------
-
-    async function handleCopyPrompt() {
-        if (!currentPrompt) return;
-
-        try {
-            await navigator.clipboard.writeText(
-                currentPrompt
-            );
-
-            setMessage("Prompt copied to clipboard.");
-            setError("");
-
-        } catch {
-            setError(
-                "Unable to copy prompt. Check clipboard permissions."
-            );
-        }
-    }
-
-
-    // ---------------------------------------------------------
-    // INSERT OR SEND PROMPT TO CHATGPT
-    // ---------------------------------------------------------
-
-    async function handleChatGPTAction(
-        shouldSend = false,
-        prompt = currentPrompt
-    ) {
-        if (
-            !prompt ||
-            isSending ||
-            !isWorkspaceReady
-        ) {
-            return;
-        }
-
-        setError("");
-        setMessage("");
-        setIsSending(true);
-
-        try {
-            await sendPromptToChatGPT(
-                prompt,
-                shouldSend
-            );
-
-            setMessage(
-                shouldSend
-                    ? "Prompt successfully inserted and sent to ChatGPT."
-                    : "Prompt inserted into ChatGPT. It has not been sent."
-            );
-
-        } catch (err) {
-            setError(
-                err.message ||
-                "Could not communicate with the ChatGPT tab."
-            );
-
-        } finally {
-            setIsSending(false);
-        }
-    }
-
-
-    // ---------------------------------------------------------
-    // ADVANCE QUEUE
-    // ---------------------------------------------------------
-
-    async function handleAdvance(status) {
-        if (
-            !currentFile ||
-            isSending ||
-            !isWorkspaceReady
-        ) {
-            return;
-        }
-
-        const nextIndex = currentIndex + 1;
-        const nextFile = files[nextIndex] || null;
-
-        setFiles((previousFiles) =>
-            previousFiles.map((file, index) =>
-                index === currentIndex
-                    ? { ...file, status }
-                    : file
-            )
-        );
-
-        setCurrentIndex(nextIndex);
-        setError("");
-
-        setMessage(
-            status === "completed"
-                ? `${currentFile.name} marked as completed.`
-                : `${currentFile.name} skipped.`
-        );
-
-        if (
-            autoSend &&
-            status === "completed" &&
-            nextFile
-        ) {
-            try {
-                let sourceContent = "";
-
-                if (nativeProjectId) {
-                    const readToken = await ensureNativeReadSession(
-                        nativeProjectId,
-                        nativeWorkingDirectory,
-                        activeTabId
-                    );
-
-                    const response = await readNativeProjectFile(
-                        nativeProjectId,
-                        nextFile.path,
-                        nativeWorkingDirectory,
-                        readToken
-                    );
-
-                    sourceContent = response.content || "";
-
-                    setNativeSourcePath(nextFile.path);
-                    setNativeSourceContent(sourceContent);
-
-                } else {
-                    const nextProjectFile = projectFiles.find(
-                        (file) => file.path === nextFile.path
-                    );
-
-                    sourceContent =
-                        nextProjectFile?.content || "";
-                }
-
-                const nextPrompt = generatePrompt({
-                    tree: treeText,
-                    template,
-                    file: nextFile,
-
-                    sourceContent:
-                        includeSourceContext
-                            ? sourceContent
-                            : "",
-                });
-
-                await handleChatGPTAction(
-                    true,
-                    nextPrompt
-                );
-
-            } catch (err) {
-                setError(
-                    err.message ||
-                    "Unable to generate or send the next prompt."
-                );
-            }
-
-        } else if (!nextFile) {
-            setMessage(
-                "All files have been processed."
-            );
-        }
-    }
-
-
-    // ---------------------------------------------------------
-    // RESET QUEUE
-    // ---------------------------------------------------------
-
-    function handleResetQueue() {
-        if (!window.confirm("Reset the entire processing queue?")) {
-            return;
-        }
-
-        setFiles((previousFiles) =>
-            previousFiles.map((file) => ({
-                ...file,
-                status: "pending",
-            }))
-        );
-
-        setCurrentIndex(0);
-
-        setMessage("Queue has been reset.");
-        setError("");
-    }
-
-
-    // ---------------------------------------------------------
-    // CLEAR QUEUE
-    // ---------------------------------------------------------
-
-    function handleClearQueue() {
-        if (!window.confirm("Clear this tab's entire queue?")) {
-            return;
-        }
-
-        setFiles([]);
-        setCurrentIndex(0);
-
-        setMessage("This tab's queue has been cleared.");
-        setError("");
-    }
-
-
-    // ---------------------------------------------------------
-    // OPEN NATIVE WRITE EDITOR
-    // ---------------------------------------------------------
-
-    function handleOpenNativeWriteEditor() {
-        if (!nativeProjectId || !currentFile) {
-            setNativeError(
-                "Connect a native project and select a file first."
-            );
-
-            return;
-        }
-
-        setNativeWritePath(currentFile.path);
-        setNativeWriteContent("");
-
-        setShowNativeWriteEditor(true);
-
-        setNativeError("");
-    }
-
-
-    // ---------------------------------------------------------
-    // WRITE GENERATED CONTENT TO LOCAL FILE
-    // ---------------------------------------------------------
-
-    async function handleWriteNativeFile() {
-        if (
-            !nativeProjectId ||
-            !nativeWritePath.trim() ||
-            !nativeWriteContent.trim()
-        ) {
-            setNativeError(
-                "A destination path and generated file content are required."
-            );
-
-            return;
-        }
-
-        const confirmed = window.confirm(
-            [
-                "You are about to write generated content to your local project.",
-                "",
-                `Project: ${nativeProjectName}`,
-                `File: ${nativeWritePath}`,
-                "",
-                "An existing file will be backed up before it is overwritten.",
-                "",
-                "Continue?",
-            ].join("\n")
-        );
-
-        if (!confirmed) return;
-
-        let writeToken;
-
-        try {
-            writeToken = await ensureNativeWriteSession(
-                nativeProjectId,
-                nativeWorkingDirectory,
-                activeTabId
-            );
-        } catch (err) {
-            setNativeError(
-                err.message || "Local write authorization was not granted."
-            );
-            return;
-        }
-
-        setIsWritingNativeFile(true);
-        setNativeError("");
-        setError("");
-        setMessage("");
-
-        try {
-
-            const response = await writeNativeProjectFile(
-                nativeProjectId,
-                nativeWritePath,
-                nativeWriteContent,
-                nativeWorkingDirectory,
-                writeToken
-            );
-
-            setMessage(
-                response.created
-                    ? `Created ${nativeWritePath} successfully.`
-                    : `Updated ${nativeWritePath} successfully. Backup: ${response.backup}`
-            );
-
-            setShowNativeWriteEditor(false);
-
-            setNativeWriteContent("");
-            setNativeWritePath("");
-
-            // Refresh the complete project listing.
-            const rootReadToken = await ensureNativeReadSession(
-                nativeProjectId,
-                "",
-                activeTabId
-            );
-
-            const refreshedAllFiles = await getNativeProjectFiles(
-                nativeProjectId,
-                "",
-                rootReadToken
-            );
-
-            setNativeProjectAllFiles(refreshedAllFiles);
-
-            const refreshedDirectories = await getNativeProjectDirectories(
-                nativeProjectId,
-                "",
-                rootReadToken
-            );
-
-            setNativeProjectDirectories(refreshedDirectories);
-
-            // Refresh the selected working directory.
-            const scopedReadToken = await ensureNativeReadSession(
-                nativeProjectId,
-                nativeWorkingDirectory,
-                activeTabId
-            );
-
-            const refreshedFiles = await getNativeProjectFiles(
-                nativeProjectId,
-                nativeWorkingDirectory,
-                scopedReadToken
-            );
-
-            setNativeProjectFiles(refreshedFiles);
-
-            
-            const workspace = buildNativeProjectWorkspace(
-                refreshedFiles,
-                nativeProjectName
-            );
-
-            setTreeText(workspace.tree);
-
-            // Update the queue only when the file was newly created.
-            if (response.created) {
-                setFiles(workspace.files);
-                setCurrentIndex(0);
-            }            
-
-        } catch (err) {
-            setNativeError(
-                err.message ||
-                "Unable to write the generated file."
-            );
-
-        } finally {
-            setIsWritingNativeFile(false);
-        }
-    }
-
-
-    // ---------------------------------------------------------
-    // RENDER
-    // ---------------------------------------------------------
 
     return (
-        <main className="min-h-screen bg-slate-50 text-slate-800">
-
-            {/* HEADER */}
-
-            <header className="border-b bg-white px-5 py-4">
-
-                <div className="flex items-center gap-3">
-
-                    <div className="rounded-lg bg-indigo-600 p-2 text-white">
-                        <FolderTree size={22} />
-                    </div>
-
-                    <div>
-                        <h1 className="text-lg font-bold">
-                            PromptFlow
-                        </h1>
-
-                        <p className="text-xs text-slate-500">
-                            Django workflow automation
-                        </p>
-                    </div>
-
+        <main className="min-h-screen space-y-5 bg-slate-50 p-5 text-slate-800">
+            <header className="flex items-center gap-3 border-b bg-white px-5 py-4">
+                <div className="rounded-lg bg-indigo-600 p-2 text-white">
+                    <FolderTree size={22} />
                 </div>
-
+                <div>
+                    <h1 className="text-lg font-bold">PromptFlow</h1>
+                    <p className="text-xs text-slate-500">Automated Django model implementation</p>
+                </div>
             </header>
 
-
-            {!globalThis.browser?.tabs ? (
-
-                <div className="flex min-h-64 items-center justify-center p-5">
-
-                    <p className="text-sm text-red-600">
-                        Firefox extension APIs are unavailable.
-                        Open PromptFlow from the Firefox sidebar.
-                    </p>
-
+            {!workspaceReady ? (
+                <div className="rounded-xl border bg-white p-5 text-sm text-slate-500">
+                    Loading the native project workspace...
                 </div>
-
-            ) : !isWorkspaceReady ? (
-
-                <div className="flex min-h-64 items-center justify-center p-5">
-
-                    <p className="text-sm text-slate-500">
-                        Loading workspace for the active tab...
-                    </p>
-
-                </div>
-
             ) : (
-
-                <div className="space-y-5 p-5">
-
-                    {/* NOTIFICATIONS */}
-
+                <>
                     {error && (
                         <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-
-                            <AlertCircle
-                                size={18}
-                                className="shrink-0"
-                            />
-
+                            <AlertCircle size={18} className="shrink-0" />
                             {error}
-
                         </div>
                     )}
-
-                    {message && (
+                    {notice && (
                         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
-                            {message}
+                            {notice}
                         </div>
                     )}
-
-
-                    {/* NATIVE COMPANION */}
 
                     <section className="rounded-xl border bg-white p-4">
-
                         <div className="mb-3 flex items-center justify-between">
-
                             <div className="flex items-center gap-2">
-
                                 <HardDrive size={18} />
-
-                                <h2 className="font-semibold">
-                                    Native Companion
-                                </h2>
-
+                                <h2 className="font-semibold">Native Companion</h2>
                             </div>
-
-                            <span
-                                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                                    nativeConnected
-                                        ? "bg-green-100 text-green-700"
-                                        : "bg-slate-100 text-slate-600"
-                                }`}
-                            >
-                                {nativeConnected
-                                    ? "Connected"
-                                    : "Disconnected"}
+                            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${nativeConnected ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"}`}>
+                                {nativeConnected ? "Connected" : "Disconnected"}
                             </span>
-
                         </div>
-
 
                         <p className="mb-3 text-xs leading-relaxed text-slate-500">
-                            Connect PromptFlow to your local filesystem
-                            to read project files and write generated
-                            code directly into your project.
+                            Connect to a registered local project. PromptFlow reads source files and writes generated workflow outputs through the scoped native host.
                         </p>
 
-
                         {nativeConnected && (
-
                             <div className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3">
-
                                 <div className="flex items-center gap-2 text-sm font-medium text-green-800">
-
                                     <ShieldCheck size={16} />
-
                                     Native host is available.
-
                                 </div>
-
-                                <p className="mt-1 text-xs text-green-700">
-                                    Version: {nativeVersion || "Unknown"}
-                                </p>
-
+                                <p className="mt-1 text-xs text-green-700">Version: {nativeVersion || "Unknown"}</p>
                             </div>
-
                         )}
 
-
                         <div className="grid grid-cols-2 gap-2">
-
                             <button
-                                onClick={handleTestNativeHost}
-                                disabled={isConnectingNative}
+                                type="button"
+                                onClick={handleTestConnection}
+                                disabled={isConnecting}
                                 className="flex items-center justify-center gap-2 rounded-lg border px-3 py-3 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
                             >
-
-                                <RefreshCw
-                                    size={15}
-                                    className={
-                                        isConnectingNative
-                                            ? "animate-spin"
-                                            : ""
-                                    }
-                                />
-
+                                <RefreshCw size={15} />
                                 Test Connection
-
                             </button>
-
-
                             <button
-                                onClick={handleLoadNativeProjects}
-                                disabled={isConnectingNative}
+                                type="button"
+                                onClick={handleLoadProjects}
+                                disabled={isConnecting}
                                 className="flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-3 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                             >
-
                                 <FolderTree size={15} />
-
                                 Load Projects
-
                             </button>
-
                         </div>
-
 
                         {nativeError && (
                             <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
@@ -2283,137 +655,71 @@ useEffect(() => {
                             </div>
                         )}
 
-
                         {nativeProjects.length > 0 && !nativeProjectId && (
-
-                            <div className="mt-4">
-
-                                <label className="mb-2 block text-xs font-semibold">
-                                    Registered Projects
-                                </label>
-
-                                <div className="space-y-2">
-
-                                    {nativeProjects.map((project) => (
-
-                                        <button
-                                            key={project.id}
-                                            onClick={() =>
-                                                handleConnectNativeProject(
-                                                    project.id
-                                                )
-                                            }
-                                            disabled={isLoadingNativeFiles}
-                                            className="flex w-full items-center justify-between rounded-lg border p-3 text-left hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-50"
-                                        >
-
-                                            <span className="min-w-0">
-
-                                                <span className="block truncate text-sm font-semibold">
-                                                    {project.name}
-                                                </span>
-
-                                                <span className="mt-1 block text-xs text-slate-500">
-                                                    Approved local project
-                                                </span>
-
-                                            </span>
-
-                                            <span className="shrink-0 text-xs font-semibold text-indigo-600">
-                                                Connect
-                                            </span>
-
-                                        </button>
-
-                                    ))}
-
-                                </div>
-
+                            <div className="mt-4 space-y-2">
+                                <label className="block text-xs font-semibold">Registered Projects</label>
+                                {nativeProjects.map((project) => (
+                                    <button
+                                        key={project.id}
+                                        type="button"
+                                        onClick={() => handleConnectProject(project.id)}
+                                        disabled={isConnecting}
+                                        className="flex w-full items-center justify-between rounded-lg border p-3 text-left hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-50"
+                                    >
+                                        <span className="min-w-0">
+                                            <span className="block truncate text-sm font-semibold">{project.name}</span>
+                                            <span className="mt-1 block text-xs text-slate-500">Approved local project</span>
+                                        </span>
+                                        <span className="shrink-0 text-xs font-semibold text-indigo-600">Connect</span>
+                                    </button>
+                                ))}
                             </div>
-
                         )}
 
-
-                        {isLoadingNativeFiles && (
-                            <p className="mt-3 text-xs text-indigo-600">
-                                Loading project files...
-                            </p>
+                        {isConnecting && (
+                            <p className="mt-3 text-xs text-indigo-600">Connecting to the native project...</p>
                         )}
-
 
                         {nativeProjectId && (
-
                             <div className="mt-4 rounded-lg border border-green-200 bg-green-50 p-3">
+                                <p className="break-all text-sm font-semibold text-green-800">{nativeProjectName}</p>
+                                <p className="mt-1 text-xs text-green-700">{nativeProjectFiles.length} files available in the selected directory.</p>
 
-                                <p className="break-all text-sm font-semibold text-green-800">
-                                    {nativeProjectName}
-                                </p>
-
-                                <p className="mt-1 text-xs text-green-700">
-                                    {nativeProjectFiles.length} files
-                                    available through native messaging.
-                                </p>
-
-                                <label className="mb-2 mt-4 block text-xs font-semibold text-green-800">
-                                    Working directory
-                                </label>
-
+                                <label className="mb-2 mt-4 block text-xs font-semibold text-green-800">Working directory</label>
                                 <select
                                     value={nativeWorkingDirectory}
-                                    onChange={(event) =>
-                                        handleChangeNativeWorkingDirectory(event.target.value)
-                                    }
-                                    disabled={isChangingWorkingDirectory}
+                                    onChange={(event) => handleChangeWorkingDirectory(event.target.value)}
+                                    disabled={isChangingDirectory}
                                     className="w-full rounded-lg border border-green-300 bg-white p-2 text-xs text-slate-700 disabled:opacity-50"
                                 >
-
                                     {nativeProjectDirectories.map((directory) => (
-                                        <option
-                                            key={directory || "__project_root__"}
-                                            value={directory}
-                                        >
+                                        <option key={directory || "__project_root__"} value={directory}>
                                             {directory || "Project Root (Entire Project)"}
                                         </option>
                                     ))}
                                 </select>
 
-                                {isChangingWorkingDirectory && (
-                                    <p className="mt-2 text-xs text-green-700">
-                                        Loading working directory...
-                                    </p>
+                                {isChangingDirectory && (
+                                    <p className="mt-2 text-xs text-green-700">Loading working directory...</p>
                                 )}
 
                                 <button
-                                    onClick={handleDisconnectNativeProject}
+                                    type="button"
+                                    onClick={handleDisconnectProject}
                                     className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50"
                                 >
-
                                     <Unplug size={14} />
-
                                     Disconnect Native Project
-
                                 </button>
-
                             </div>
-
                         )}
 
-
                         <p className="mt-3 text-xs leading-relaxed text-slate-500">
-                            Projects must first be registered using
-                            <code className="mx-1 rounded bg-slate-100 px-1 py-0.5">
-                                python3 native/host.py --register-project PATH
-                            </code>
-                            in your terminal.
+                            Register projects with <code className="mx-1 rounded bg-slate-100 px-1 py-0.5">python3 native/host.py --register-project PATH</code>.
                         </p>
-
                     </section>
 
-
-                    {/* DJANGO MODEL WORKFLOW */}
-
                     {nativeProjectId && (
-
                         <DjangoModelWorkflowPanel
                             activeTabId={activeTabId}
                             nativeProjectId={nativeProjectId}
@@ -2421,88 +727,16 @@ useEffect(() => {
                             nativeWorkingDirectory={nativeWorkingDirectory}
                             nativeProjectFiles={nativeProjectFiles}
                             treeText={treeText}
-                            
-                            readNativeProjectFile={async (projectId, path) => {
-                                const readToken = await ensureNativeReadSession(
-                                    projectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                );
-
-                                return readNativeProjectFile(
-                                    projectId,
-                                    path,
-                                    nativeWorkingDirectory,
-                                    readToken
-                                );
-                            }}
-
-                            writeNativeProjectFile={async (projectId, path, content) => {
-                                const writeToken = await ensureNativeWriteSession(
-                                    projectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                );
-
-                                return writeNativeProjectFile(
-                                    projectId,
-                                    path,
-                                    content,
-                                    nativeWorkingDirectory,
-                                    writeToken
-                                );
-                            }}
-
-                            getNativeProjectFiles={async (projectId) => {
-                                const readToken = await ensureNativeReadSession(
-                                    projectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                );
-
-                                return getNativeProjectFiles(
-                                    projectId,
-                                    nativeWorkingDirectory,
-                                    readToken
-                                );
-                            }}
-
-                            getWorkflowAuthorization={async () => {
-                                const readToken = await ensureNativeReadSession(
-                                    nativeProjectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                );
-
-                                const writeToken = await ensureNativeWriteSession(
-                                    nativeProjectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                );
-
-                                return {
-                                    readToken,
-                                    writeToken,
-                                };
-                            }}
-
-                            ensureWriteAuthorization={async () =>
-                                ensureNativeWriteSession(
-                                    nativeProjectId,
-                                    nativeWorkingDirectory,
-                                    activeTabId
-                                )
-                            }
+                            readNativeProjectFile={readNativeProjectFile}
+                            writeNativeProjectFile={writeNativeProjectFile}
+                            getNativeProjectFiles={getProjectFiles}
+                            getWorkflowAuthorization={getWorkflowAuthorization}
+                            ensureWriteAuthorization={ensureWriteAuthorization}
                             sendPromptToChatGPT={sendPromptToChatGPT}
                         />
-
                     )}
-
-
-                </div>
-
+                </>
             )}
-
         </main>
     );
 }
