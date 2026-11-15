@@ -2354,9 +2354,7 @@ async function executeWorkflow(initialWorkflow) {
                                                     </span>
 
                                                     <span className="text-xs text-slate-400">
-                                                        {model.modelSource === "existing"
-                                                            ? "Existing model"
-                                                            : "New model"}
+                                                        Automatic project detection
                                                     </span>
 
                                                 </div>
