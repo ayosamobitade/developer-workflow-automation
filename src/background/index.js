@@ -20,6 +20,7 @@ const MESSAGE_TYPES = {
     START_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_START",
     PAUSE_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_PAUSE",
     STOP_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_STOP",
+    GET_PENDING_CONFIRMATIONS: "PROMPTFLOW_BACKGROUND_PENDING_CONFIRMATIONS",
 };
 
 const extensionBaseURL = browser.runtime.getURL("");
@@ -188,6 +189,17 @@ function createConfirmationRequest({
 
 
 
+
+async function getPendingConfirmations(workflowTabId) {
+    const stored = await browser.storage.local.get(null);
+
+    return Object.entries(stored)
+        .filter(([key, request]) =>
+            key.startsWith("promptflow_pending_confirmation_") &&
+            request?.workflowTabId === workflowTabId
+        )
+        .map(([, request]) => request);
+}
 
 async function resolveConfirmation(message) {
     const pending = pendingConfirmations.get(message.requestId);
@@ -730,6 +742,14 @@ browser.runtime.onMessage.addListener((message, sender) => {
                     : null,
             });
         }
+
+        case MESSAGE_TYPES.GET_PENDING_CONFIRMATIONS:
+            return getPendingConfirmations(message.workflowTabId).then(
+                (requests) => ({
+                    success: true,
+                    requests,
+                })
+            );
 
         case MESSAGE_TYPES.CONFIRM_DESTINATIONS_RESULT:
             return resolveConfirmation(message);
