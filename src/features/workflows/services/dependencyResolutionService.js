@@ -121,3 +121,32 @@ export function buildPromptWithDependencySources(originalPrompt, dependencies) {
         ...sections,
     ].join("\n\n");
 }
+
+/**
+ * Sends a dependency as a separate ChatGPT message. The original task
+ * instruction is deliberately not modified or combined with file contents.
+ */
+export function buildDependencyContextPrompt(request, content) {
+    const path = normalizeDependencyPath(request.path);
+
+    if (typeof content !== "string" || !content.trim()) {
+        throw new Error(`Dependency file "${path}" has no content to provide.`);
+    }
+
+    return [
+        "PROMPTFLOW ADDITIONAL SOURCE FILE",
+        "=================================",
+        `Requested file: ${path}`,
+        request.reason ? `Reason: ${request.reason}` : "",
+        request.requiredFor ? `Required for: ${request.requiredFor}` : "",
+        "",
+        "The following is the complete content read from the project. Treat it as source context; do not recreate or modify it.",
+        `<<<PROMPTFLOW_DEPENDENCY_SOURCE_START:${path}>>>`,
+        "```",
+        content,
+        "```",
+        `<<<PROMPTFLOW_DEPENDENCY_SOURCE_END:${path}>>>`,
+        "",
+        "I will now resend the exact prompt instruction that was interrupted. Follow that next instruction using this source file.",
+    ].filter(Boolean).join("\n");
+}
