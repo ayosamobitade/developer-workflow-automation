@@ -1370,20 +1370,8 @@ async function executeWorkflow(initialWorkflow) {
                 implementationPlan;
             newWorkflow.input.automaticContinuation = true;
 
-            const existingModel =
-                implementationPlan.existingFiles["create_model.model"];
-
-            if (existingModel) {
-                newWorkflow = await seedExistingModelWorkflow(
-                    newWorkflow,
-                    modelPath.trim()
-                );
-                newWorkflow.input.existingFiles =
-                    implementationPlan.existingFiles;
-                newWorkflow.input.implementationPlan =
-                    implementationPlan;
-                newWorkflow.input.automaticContinuation = true;
-            }
+            // Existing model contents are passed to create_model for assessment
+            // and continuation; a non-empty file is not assumed complete.
 
             emitImplementationPlanNotice(
                 implementationPlan
