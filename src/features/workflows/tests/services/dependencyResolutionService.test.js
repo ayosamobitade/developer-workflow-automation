@@ -4,8 +4,6 @@ import assert from "node:assert/strict";
 import {
     normalizeDependencyPath,
     extractDependencyRequest,
-    buildDependencyFilePrompt,
-    extractDependencyFile,
     buildDependencyContextPrompt,
 } from "../../services/dependencyResolutionService.js";
 
@@ -36,29 +34,6 @@ test("rejects unsafe dependency paths", () => {
 
 test("returns null when ChatGPT did not request a dependency", () => {
     assert.equal(extractDependencyRequest("Here is the completed implementation."), null);
-});
-
-test("builds a separate dependency-file generation prompt", () => {
-    const prompt = buildDependencyFilePrompt({
-        path: "core/accounts/models/user.py",
-        reason: "The task needs the user model.",
-    });
-
-    assert.match(prompt, /Required path: core\/accounts\/models\/user\.py/);
-    assert.match(prompt, /PROMPTFLOW_DEPENDENCY_FILE_START/);
-});
-
-test("extracts complete dependency file content", () => {
-    const response = [
-        "<<<PROMPTFLOW_DEPENDENCY_FILE_START>>>",
-        "```python",
-        "class User:",
-        "    pass",
-        "```",
-        "<<<PROMPTFLOW_DEPENDENCY_FILE_END>>>",
-    ].join("\n");
-
-    assert.equal(extractDependencyFile(response), "class User:\n    pass");
 });
 
 test("builds dependency context as a separate message without embedding the original instruction", () => {
