@@ -19,12 +19,6 @@ import {
     createWorkflowInstance,
     getWorkflowProgress,
     retryWorkflowTask,
-    startWorkflowTask,
-    storeWorkflowOutput,
-    validateWorkflowOutput,
-    assignWorkflowOutputDestination,
-    markWorkflowOutputWritten,
-    completeWorkflowTask,
 } from "../services/workflowService.js";
 
 import {
@@ -221,7 +215,6 @@ export default function DjangoModelWorkflowPanel({
     const [modelPath, setModelPath] = useState("");
 
     const [sourceMode, setSourceMode] = useState("full");
-    const [modelSourceMode, setModelSourceMode] = useState("create");
 
     // These are deliberately separate:
     // executionMode: single | batch
@@ -229,8 +222,6 @@ export default function DjangoModelWorkflowPanel({
     const [executionMode, setExecutionMode] = useState("single");
     const [batchMode, setBatchMode] = useState(BATCH_MODE.MANUAL);
 
-    const [batchModelSourceMode, setBatchModelSourceMode] =
-        useState("existing");
 
     const [discoveredModels, setDiscoveredModels] = useState([]);
     const [selectedModels, setSelectedModels] = useState([]);
@@ -584,16 +575,6 @@ export default function DjangoModelWorkflowPanel({
                         setBatchMode(BATCH_MODE.MANUAL);
                     }
 
-                    const currentModel =
-                        savedBatch.models?.[
-                            savedBatch.currentIndex
-                        ];
-
-                    if (currentModel?.modelSource) {
-                        setBatchModelSourceMode(
-                            currentModel.modelSource
-                        );
-                    }
                 }
 
             } catch (err) {
@@ -1195,106 +1176,6 @@ async function executeWorkflow(initialWorkflow) {
         return null;
     }
 }
-
-    // ---------------------------------------------------------
-    // SEED AN EXISTING MODEL FOR SINGLE-MODE EXECUTION
-    // ---------------------------------------------------------
-
-    async function seedExistingModelWorkflow(
-        initialWorkflow,
-        path
-    ) {
-        const response = await readNativeProjectFile(
-            nativeProjectId,
-            path,
-            nativeWorkingDirectory || ""
-        );
-
-        const content =
-            typeof response === "string"
-                ? response
-                : response?.content;
-
-        if (
-            typeof content !== "string" ||
-            !content.trim()
-        ) {
-            throw new Error(
-                `The existing model "${path}" is empty or could not be read.`
-            );
-        }
-
-        const taskDefinition =
-            DJANGO_MODEL_WORKFLOW.tasks.find(
-                (task) => task.id === "create_model"
-            );
-
-        const outputDefinition =
-            taskDefinition?.outputs?.[0];
-
-        if (!outputDefinition) {
-            throw new Error(
-                'The "create_model" task has no model output definition.'
-            );
-        }
-
-        let nextWorkflow = startWorkflowTask(
-            initialWorkflow,
-            "create_model",
-            DJANGO_MODEL_WORKFLOW
-        );
-
-        nextWorkflow = storeWorkflowOutput(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-                content,
-            }
-        );
-
-        nextWorkflow = validateWorkflowOutput(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-            }
-        );
-
-        nextWorkflow = assignWorkflowOutputDestination(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-                path,
-                confirmed: true,
-            }
-        );
-
-        nextWorkflow = markWorkflowOutputWritten(
-            nextWorkflow,
-            {
-                taskId: "create_model",
-                outputId: outputDefinition.id,
-            }
-        );
-
-        nextWorkflow = completeWorkflowTask(
-            nextWorkflow,
-            "create_model"
-        );
-
-        return nextWorkflow;
-    }
-
-
-    function emitImplementationPlanNotice(plan) {
-        const { missing, empty, existing } = plan.summary;
-        setNotice(
-            `Project inspected: ${existing} existing implementation(s), ${empty} empty file(s), and ${missing} missing file(s). PromptFlow will continue from the detected project state.`
-        );
-    }
-
 
     // ---------------------------------------------------------
     // START SINGLE WORKFLOW
