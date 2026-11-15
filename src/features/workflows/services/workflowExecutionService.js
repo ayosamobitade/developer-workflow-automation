@@ -220,21 +220,21 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         appRoot,
         "models",
         modelGroup,
-        \`\${modelName}.py\`,
+        `${modelName}.py`,
     ].filter(Boolean).join("/");
 
     const selectorPath = [
         appRoot,
         "selectors",
         modelGroup,
-        \`\${modelName}_selector.py\`,
+        `${modelName}_selector.py`,
     ].filter(Boolean).join("/");
 
     const servicePath = [
         appRoot,
         "services",
         modelGroup,
-        \`\${modelName}_service.py\`,
+        `${modelName}_service.py`,
     ].filter(Boolean).join("/");
 
     const sourcePaths = {
@@ -250,7 +250,7 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
             const path = sourcePaths[source.id];
             if (!path) {
                 throw new Error(
-                    \`Cannot infer the source path for dependency "\${source.id}" required by "\${dependencyPath}".\`
+                    `Cannot infer the source path for dependency "${source.id}" required by "${dependencyPath}".`
                 );
             }
             return {
