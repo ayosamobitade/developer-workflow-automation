@@ -159,6 +159,7 @@ function createFailedModelWorkflow({
 function createExecutionEnvironment({
     workflow,
     initialFiles = {},
+    sendPrompt,
 } = {}) {
     const files = new Map(
         Object.entries(initialFiles)
@@ -207,8 +208,12 @@ function createExecutionEnvironment({
             return [...files.keys()];
         },
 
-        sendPrompt: async () => {
+        sendPrompt: async (prompt) => {
             calls.sendPrompt += 1;
+
+            if (sendPrompt) {
+                return sendPrompt(prompt);
+            }
 
             throw new Error(
                 "ChatGPT should not be called during recovery."
@@ -237,6 +242,82 @@ async function executeRecovery(environment) {
         workflow: environment.workflow,
     });
 }
+
+
+test(
+    "assesses and skips a complete existing model without rewriting it",
+    async () => {
+        const workflow = createWorkflowInstance({
+            definition: MODEL_RECOVERY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree: "core/finance/payments/models/payment.py",
+        });
+
+        const plan = {
+            modelPath: MODEL_PATH,
+            deliverables: [{
+                taskId: "create_model",
+                outputId: "model",
+                path: MODEL_PATH,
+                status: "existing",
+                hasContent: true,
+            }],
+            existingFiles: {
+                "create_model.model": {
+                    path: MODEL_PATH,
+                    content: MODEL_CONTENT,
+                },
+            },
+            summary: {
+                total: 1,
+                missing: 0,
+                empty: 0,
+                existing: 1,
+            },
+        };
+
+        workflow.input.existingFiles = plan.existingFiles;
+        workflow.input.implementationPlan = plan;
+        workflow.input.automaticContinuation = true;
+
+        const environment = createExecutionEnvironment({
+            workflow,
+            initialFiles: {
+                [MODEL_PATH]: MODEL_CONTENT,
+            },
+            sendPrompt: async (prompt) => {
+                assert.match(prompt, /EXISTING IMPLEMENTATION ASSESSMENT/);
+                assert.match(prompt, /class Payment/);
+                return JSON.stringify({
+                    tasks: {
+                        create_model: "COMPLETE",
+                    },
+                });
+            },
+        });
+
+        const result = await environment.controller.run({
+            tabId: 10,
+            workflow,
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.workflow.status, "completed");
+        assert.equal(environment.calls.sendPrompt, 1);
+        assert.equal(environment.calls.writeFile.length, 0);
+        assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT);
+        assert.equal(
+            getWorkflowOutput(result.workflow, "create_model", "model").status,
+            WORKFLOW_OUTPUT_STATUS.WRITTEN
+        );
+        assert.equal(
+            result.workflow.input.implementationAssessments.create_model,
+            "COMPLETE"
+        );
+    }
+);
 
 
 test(
