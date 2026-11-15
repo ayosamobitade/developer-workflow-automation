@@ -436,6 +436,99 @@ export function discoverDjangoModelFiles(files) {
  *         "remove_tests" | "remove_comments_and_tests"
  * }
  */
+
+/**
+ * Update a not-yet-started batch from the current model selection.
+ * Existing selected entries are retained; deselected entries are removed.
+ */
+export async function updateWorkflowBatchSelection({
+    tabId,
+    batchId,
+    models,
+    modelSource = "existing",
+    sourceMode = "full",
+}) {
+    assertValidTabId(tabId);
+
+    if (!Array.isArray(models) || models.length === 0) {
+        throw new Error("Select at least one Django model file.");
+    }
+
+    const record = await getBatchState(tabId);
+    const batch = getBatchFromRecord(record);
+
+    if (!batch || batch.id !== batchId) {
+        throw new Error("The saved batch could not be found.");
+    }
+
+    if (batch.status !== BATCH_STATUS.READY) {
+        throw new Error("Only a batch that has not started can have its execution list updated.");
+    }
+
+    const normalizedModels = models.map((model) =>
+        getModelConfiguration(model, { modelSource, sourceMode })
+    );
+    const seen = new Set();
+
+    for (const model of normalizedModels) {
+        if (seen.has(model.path)) {
+            throw new Error(`Duplicate model selected: "${model.path}".`);
+        }
+        seen.add(model.path);
+    }
+
+    const previousByPath = new Map(
+        batch.models.map((model) => [model.path, model])
+    );
+    const timestamp = now();
+
+    batch.models = normalizedModels.map((model) => {
+        const previous = previousByPath.get(model.path);
+
+        if (previous) {
+            return {
+                ...previous,
+                modelSource: model.modelSource,
+                sourceMode: model.sourceMode,
+                updatedAt: timestamp,
+            };
+        }
+
+        return {
+            path: model.path,
+            modelSource: model.modelSource,
+            sourceMode: model.sourceMode,
+            status: BATCH_MODEL_STATUS.PENDING,
+            workflow: null,
+            error: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: null,
+            completedAt: null,
+        };
+    });
+
+    batch.currentIndex = Math.max(
+        0,
+        batch.models.findIndex((model) =>
+            model.status === BATCH_MODEL_STATUS.PENDING ||
+            model.status === BATCH_MODEL_STATUS.FAILED
+        )
+    );
+
+    if (batch.models.every((model) =>
+        model.status === BATCH_MODEL_STATUS.COMPLETED ||
+        model.status === BATCH_MODEL_STATUS.SKIPPED
+    )) {
+        batch.currentIndex = batch.models.length;
+    }
+
+    batch.updatedAt = timestamp;
+    await saveBatchState(tabId, batch);
+
+    return batch;
+}
+
 export async function createWorkflowBatch({
     tabId,
     projectId,
