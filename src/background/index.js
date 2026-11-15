@@ -230,11 +230,15 @@ async function sendPromptWithDependencyResolution({
 
         if (!content.trim()) {
             void broadcast(MESSAGE_TYPES.EVENT, {
-                event: "dependency_generation_started",
+                event: "workflow_event",
                 runId,
                 workflowTabId,
-                path: dependencyPath,
-                reason: request.reason,
+                workflowEvent: {
+                    type: "dependency_generation_started",
+                    timestamp: new Date().toISOString(),
+                    path: dependencyPath,
+                    reason: request.reason,
+                },
             });
 
             const generatedResponse = await sendPromptToChatGPT(
@@ -313,19 +317,27 @@ async function sendPromptWithDependencyResolution({
             content = verified.content;
 
             void broadcast(MESSAGE_TYPES.EVENT, {
-                event: "dependency_file_ready",
+                event: "workflow_event",
                 runId,
                 workflowTabId,
-                path: dependencyPath,
-                generated: true,
+                workflowEvent: {
+                    type: "dependency_file_ready",
+                    timestamp: new Date().toISOString(),
+                    path: dependencyPath,
+                    generated: true,
+                },
             });
         } else {
             void broadcast(MESSAGE_TYPES.EVENT, {
-                event: "dependency_file_found",
+                event: "workflow_event",
                 runId,
                 workflowTabId,
-                path: dependencyPath,
-                generated: false,
+                workflowEvent: {
+                    type: "dependency_file_found",
+                    timestamp: new Date().toISOString(),
+                    path: dependencyPath,
+                    generated: false,
+                },
             });
         }
 
