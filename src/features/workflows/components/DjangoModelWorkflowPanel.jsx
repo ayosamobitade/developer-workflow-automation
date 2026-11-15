@@ -1266,12 +1266,6 @@ async function executeWorkflow(initialWorkflow) {
             setWorkflow(newWorkflow);
             setEvents([]);
 
-            setNotice(
-                modelSourceMode === "existing"
-                    ? "Existing model loaded. Continuing with the remaining workflow tasks."
-                    : "New Django model workflow created."
-            );
-
             await executeWorkflow(newWorkflow);
 
         } catch (err) {
