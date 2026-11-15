@@ -344,7 +344,7 @@ test(
         });
 
         assert.equal(result.success, true);
-        assert.equal(environment.calls.sendPrompt, 1);
+        assert.equal(environment.calls.sendPrompt, 0);
         assert.deepEqual(
             environment.calls.writeFile.map((item) => item.path),
             [modelTestPath]
@@ -361,7 +361,7 @@ test(
 );
 
 test(
-    "assesses and skips a complete existing model without rewriting it",
+    "preserves a complete existing model without rewriting it",
     async () => {
         const workflow = createWorkflowInstance({
             definition: MODEL_RECOVERY_WORKFLOW,
@@ -403,14 +403,10 @@ test(
             initialFiles: {
                 [MODEL_PATH]: MODEL_CONTENT,
             },
-            sendPrompt: async (prompt) => {
-                assert.match(prompt, /EXISTING IMPLEMENTATION ASSESSMENT/);
-                assert.match(prompt, /class Payment/);
-                return JSON.stringify({
-                    tasks: {
-                        create_model: "COMPLETE",
-                    },
-                });
+            sendPrompt: async () => {
+                throw new Error(
+                    "An existing non-empty model must be preserved without prompting."
+                );
             },
         });
 
@@ -427,10 +423,6 @@ test(
         assert.equal(
             getWorkflowOutput(result.workflow, "create_model", "model").status,
             WORKFLOW_OUTPUT_STATUS.WRITTEN
-        );
-        assert.equal(
-            result.workflow.input.implementationAssessments.create_model,
-            "COMPLETE"
         );
     }
 );
