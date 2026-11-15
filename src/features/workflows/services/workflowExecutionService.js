@@ -602,9 +602,14 @@ export function createWorkflowExecutionController({
             // continuation may update them because the native host creates a
             // timestamped backup before replacing an existing destination.
             if (
-                existingFile.content.trim() !== "" ||
                 taskOutput.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
             ) {
+                throw new Error(
+                    `Recovery conflict: "${destination}" was previously written by this workflow but now contains different content. It was not overwritten.`
+                );
+            }
+
+            if (existingFile.content.trim() !== "") {
                 if (!workflow.input?.automaticContinuation) {
                     throw new Error(
                         `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
