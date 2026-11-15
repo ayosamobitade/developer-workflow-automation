@@ -1,5 +1,10 @@
 import { createWorkflowExecutionController } from "../features/workflows/services/workflowExecutionService";
 import { DJANGO_MODEL_WORKFLOW } from "../features/workflows/definitions/django-model-workflow";
+import {
+    startWorkflowBatch,
+    pauseWorkflowBatch,
+    stopWorkflowBatch,
+} from "../features/workflows/services/batchWorkflowService";
 
 const NATIVE_HOST = "com.samworld.promptflow";
 const NATIVE_MESSAGE_TYPE = "PROMPTFLOW_NATIVE";
@@ -12,6 +17,9 @@ const MESSAGE_TYPES = {
     CONFIRM_DESTINATIONS_RESULT:
         "PROMPTFLOW_BACKGROUND_DESTINATION_CONFIRMATION_RESULT",
     EVENT: "PROMPTFLOW_BACKGROUND_WORKFLOW_EVENT",
+    START_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_START",
+    PAUSE_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_PAUSE",
+    STOP_BATCH: "PROMPTFLOW_BACKGROUND_BATCH_STOP",
 };
 
 const extensionBaseURL = browser.runtime.getURL("");
@@ -245,6 +253,7 @@ async function runWorkflow(message) {
 
     const runRecord = {
         runId,
+        runType: "workflow",
         workflowTabId,
         chatTabId,
         projectId,
@@ -360,6 +369,210 @@ async function runWorkflow(message) {
     }
 }
 
+
+async function runBatch(message) {
+    const {
+        batchId,
+        workflowTabId,
+        chatTabId,
+        projectId,
+        workingDirectory = "",
+        readToken,
+        writeToken,
+    } = message;
+
+    if (!batchId) {
+        throw new Error("A batch ID is required.");
+    }
+
+    if (!Number.isInteger(workflowTabId) || workflowTabId < 0) {
+        throw new Error("A valid workflow tab ID is required.");
+    }
+
+    if (!Number.isInteger(chatTabId) || chatTabId < 0) {
+        throw new Error("A valid ChatGPT tab ID is required.");
+    }
+
+    if (!projectId || !readToken || !writeToken) {
+        throw new Error(
+            "Project authorization is incomplete. Reauthorize project access and try again."
+        );
+    }
+
+    if (activeRuns.has(workflowTabId)) {
+        throw new Error(
+            "An execution is already running for this Firefox tab."
+        );
+    }
+
+    const runId = crypto.randomUUID();
+
+    const runRecord = {
+        runId,
+        runType: "batch",
+        batchId,
+        workflowTabId,
+        chatTabId,
+        projectId,
+        workingDirectory,
+        stopRequested: false,
+        status: "RUNNING",
+        startedAt: new Date().toISOString(),
+    };
+
+    activeRuns.set(workflowTabId, runRecord);
+
+    await broadcast(MESSAGE_TYPES.EVENT, {
+        event: "batch_started",
+        runId,
+        batchId,
+        workflowTabId,
+    });
+
+    try {
+        const result = await startWorkflowBatch({
+            tabId: workflowTabId,
+            batchId,
+
+            readFile: (path) => readProjectFile({
+                projectId,
+                workingDirectory,
+                readToken,
+                path,
+            }),
+
+            runModel: async ({
+                workflow,
+                preparationMode,
+                onWorkflowChange,
+            }) => {
+                const controller = createWorkflowExecutionController({
+                    definition: DJANGO_MODEL_WORKFLOW,
+
+                    readFile: (path) => readProjectFile({
+                        projectId,
+                        workingDirectory,
+                        readToken,
+                        path,
+                    }),
+
+                    writeFile: (path, content) => writeProjectFile({
+                        projectId,
+                        workingDirectory,
+                        writeToken,
+                        path,
+                        content,
+                    }),
+
+                    listFiles: () => listProjectFiles({
+                        projectId,
+                        workingDirectory,
+                        readToken,
+                    }),
+
+                    sendPrompt: (prompt) => (
+                        sendPromptToChatGPT(chatTabId, prompt)
+                    ),
+
+                    confirmDestinations: (confirmation) => (
+                        createConfirmationRequest({
+                            runId,
+                            workflowTabId,
+                            taskId: confirmation.taskId,
+                            destinations: confirmation.destinations,
+                        })
+                    ),
+
+                    onStateChange: (updatedWorkflow) => {
+                        onWorkflowChange?.(updatedWorkflow);
+
+                        void broadcast(MESSAGE_TYPES.EVENT, {
+                            event: "batch_workflow_state_changed",
+                            runId,
+                            batchId,
+                            workflowTabId,
+                            workflow: updatedWorkflow,
+                        });
+                    },
+
+                    onEvent: (event) => {
+                        void broadcast(MESSAGE_TYPES.EVENT, {
+                            event: "batch_workflow_event",
+                            runId,
+                            batchId,
+                            workflowTabId,
+                            workflowEvent: event,
+                        });
+                    },
+
+                    shouldStop: () => runRecord.stopRequested,
+                });
+
+                return controller.run({
+                    tabId: workflowTabId,
+                    workflow,
+                    sourceModes: {
+                        model: preparationMode,
+                    },
+                });
+            },
+
+            onBatchChange: (batch) => {
+                void broadcast(MESSAGE_TYPES.EVENT, {
+                    event: "batch_state_changed",
+                    runId,
+                    batchId,
+                    workflowTabId,
+                    batch,
+                });
+            },
+
+            onModelChange: (modelEvent) => {
+                void broadcast(MESSAGE_TYPES.EVENT, {
+                    event: "batch_model_changed",
+                    runId,
+                    batchId,
+                    workflowTabId,
+                    modelEvent,
+                });
+            },
+        });
+
+        runRecord.status = result?.batch?.status?.toUpperCase() ||
+            (result?.success ? "COMPLETED" : "FAILED");
+        runRecord.completedAt = new Date().toISOString();
+
+        await broadcast(MESSAGE_TYPES.EVENT, {
+            event: "batch_finished",
+            runId,
+            batchId,
+            workflowTabId,
+            result,
+        });
+
+        return result;
+
+    } catch (error) {
+        runRecord.status = "FAILED";
+
+        await broadcast(MESSAGE_TYPES.EVENT, {
+            event: "batch_failed",
+            runId,
+            batchId,
+            workflowTabId,
+            error: error.message || String(error),
+        });
+
+        return {
+            success: false,
+            error: error.message || String(error),
+        };
+
+    } finally {
+        activeRuns.delete(workflowTabId);
+    }
+}
+
 browser.runtime.onMessage.addListener((message, sender) => {
     if (!isExtensionMessage(sender)) {
         return undefined;
@@ -390,6 +603,97 @@ browser.runtime.onMessage.addListener((message, sender) => {
             });
         }
 
+        case MESSAGE_TYPES.START_BATCH: {
+            const workflowTabId = message.workflowTabId;
+
+            if (activeRuns.has(workflowTabId)) {
+                return Promise.resolve({
+                    success: false,
+                    error: "An execution is already running for this tab.",
+                });
+            }
+
+            void runBatch(message).catch((error) => {
+                broadcast(MESSAGE_TYPES.EVENT, {
+                    event: "batch_start_failed",
+                    batchId: message.batchId,
+                    workflowTabId,
+                    error: error.message || String(error),
+                });
+            });
+
+            return Promise.resolve({
+                success: true,
+                accepted: true,
+            });
+        }
+
+        case MESSAGE_TYPES.PAUSE_BATCH: {
+            const run = activeRuns.get(message.workflowTabId);
+
+            if (
+                !run ||
+                run.runType !== "batch" ||
+                run.batchId !== message.batchId
+            ) {
+                return Promise.resolve({
+                    success: false,
+                    error: "No matching active batch was found.",
+                });
+            }
+
+            return pauseWorkflowBatch(
+                message.workflowTabId,
+                message.batchId
+            ).then(async (batch) => {
+                await broadcast(MESSAGE_TYPES.EVENT, {
+                    event: "batch_state_changed",
+                    runId: run.runId,
+                    batchId: run.batchId,
+                    workflowTabId: run.workflowTabId,
+                    batch,
+                });
+
+                return { success: true, batch };
+            }).catch((error) => ({
+                success: false,
+                error: error.message || String(error),
+            }));
+        }
+
+        case MESSAGE_TYPES.STOP_BATCH: {
+            const run = activeRuns.get(message.workflowTabId);
+
+            if (
+                !run ||
+                run.runType !== "batch" ||
+                run.batchId !== message.batchId
+            ) {
+                return Promise.resolve({
+                    success: false,
+                    error: "No matching active batch was found.",
+                });
+            }
+
+            return stopWorkflowBatch(
+                message.workflowTabId,
+                message.batchId
+            ).then(async (batch) => {
+                await broadcast(MESSAGE_TYPES.EVENT, {
+                    event: "batch_state_changed",
+                    runId: run.runId,
+                    batchId: run.batchId,
+                    workflowTabId: run.workflowTabId,
+                    batch,
+                });
+
+                return { success: true, batch };
+            }).catch((error) => ({
+                success: false,
+                error: error.message || String(error),
+            }));
+        }
+
         case MESSAGE_TYPES.STOP: {
             const run = activeRuns.get(message.workflowTabId);
 
@@ -416,6 +720,8 @@ browser.runtime.onMessage.addListener((message, sender) => {
                 run: run
                     ? {
                         runId: run.runId,
+                        runType: run.runType,
+                        batchId: run.batchId || null,
                         status: run.status,
                         workflowTabId: run.workflowTabId,
                         chatTabId: run.chatTabId,
