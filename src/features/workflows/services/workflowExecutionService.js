@@ -27,11 +27,6 @@ import {
 } from "./sourcePreparationService.js";
 
 import {
-    buildImplementationAssessmentPrompt,
-    parseImplementationAssessment,
-} from "./automaticWorkflowPlanner.js";
-
-import {
     extractWorkflowOutputs,
 } from "./workflowOutputService.js";
 
@@ -711,168 +706,6 @@ export function createWorkflowExecutionController({
             timestamp: new Date().toISOString(),
             ...details,
         });
-    }
-
-
-    async function assessExistingTask({
-        tabId,
-        workflow,
-        taskId,
-    }) {
-        const plan = workflow.input?.implementationPlan;
-        const taskDefinition = getTaskDefinition(definition, taskId);
-        const deliverables = plan?.deliverables?.filter(
-            (item) => item.taskId === taskId
-        ) || [];
-
-        if (
-            !plan ||
-            deliverables.length !== taskDefinition.outputs.length ||
-            deliverables.some((item) => item.status !== "existing")
-        ) {
-            return { workflow, status: "NEEDS_WORK" };
-        }
-
-        const savedAssessment =
-            workflow.input?.implementationAssessments?.[taskId];
-
-        if (savedAssessment) {
-            return { workflow, status: savedAssessment };
-        }
-
-        const prompt = buildImplementationAssessmentPrompt(
-            plan,
-            definition,
-            [taskId],
-            workflow
-        );
-
-        if (!prompt) {
-            return { workflow, status: "NEEDS_WORK" };
-        }
-
-        let status = "NEEDS_WORK";
-        const estimatedTokens = estimatePromptTokens(prompt);
-
-        if (estimatedTokens <= MAX_PROMPT_TOKENS) {
-            emit("implementation_assessment_started", {
-                taskId,
-                estimatedTokens,
-            });
-
-            const response = await sendPrompt(prompt);
-            assertNotStopped(shouldStop);
-
-            status = parseImplementationAssessment(
-                response,
-                plan,
-                definition
-            )[taskId] || "NEEDS_WORK";
-        } else {
-            emit("implementation_assessment_skipped", {
-                taskId,
-                estimatedTokens,
-                reason: "assessment_prompt_exceeds_budget",
-            });
-        }
-
-        // Re-read every candidate before accepting COMPLETE. If a file changed
-        // after inspection, refresh the prompt context and run the task normally.
-        if (status === "COMPLETE") {
-            for (const output of taskDefinition.outputs) {
-                const key = `${taskId}.${output.id}`;
-                const snapshot = workflow.input.existingFiles?.[key];
-                const current = snapshot
-                    ? await readFile(snapshot.path)
-                    : null;
-
-                if (
-                    !snapshot ||
-                    !current ||
-                    typeof current.content !== "string" ||
-                    current.content !== snapshot.content
-                ) {
-                    status = "NEEDS_WORK";
-
-                    if (current && typeof current.content === "string" && current.content.trim()) {
-                        const refreshed = {
-                            path: snapshot?.path || plan.deliverables.find(
-                                (item) => item.taskId === taskId && item.outputId === output.id
-                            )?.path,
-                            content: current.content,
-                        };
-                        workflow.input.existingFiles[key] = refreshed;
-                        plan.existingFiles[key] = refreshed;
-                    } else {
-                        delete workflow.input.existingFiles[key];
-                        delete plan.existingFiles[key];
-                    }
-                }
-            }
-        }
-
-        workflow.input.implementationAssessments ||= {};
-        workflow.input.implementationAssessments[taskId] = status;
-        await persist(tabId, workflow);
-
-        emit("implementation_assessment_completed", {
-            taskId,
-            status,
-        });
-
-        return { workflow, status };
-    }
-
-
-    async function seedAssessedTask({
-        tabId,
-        workflow,
-        taskId,
-    }) {
-        const taskDefinition = getTaskDefinition(definition, taskId);
-        workflow = startWorkflowTask(workflow, taskId);
-
-        for (const output of taskDefinition.outputs) {
-            const key = `${taskId}.${output.id}`;
-            const existing = workflow.input.existingFiles[key];
-
-            workflow = storeWorkflowOutput(workflow, {
-                taskId,
-                outputId: output.id,
-                content: existing.content,
-            });
-
-            workflow = validateWorkflowOutput(workflow, {
-                taskId,
-                outputId: output.id,
-            });
-
-            workflow = assignWorkflowOutputDestination(workflow, {
-                taskId,
-                outputId: output.id,
-                path: existing.path,
-                confirmed: true,
-            });
-
-            workflow = markWorkflowOutputWritten(workflow, {
-                taskId,
-                outputId: output.id,
-            });
-        }
-
-        workflow = completeWorkflowTask(workflow, taskId);
-        await persist(tabId, workflow);
-
-        emit("existing_implementation_skipped", {
-            taskId,
-            paths: taskDefinition.outputs.map(
-                (output) => workflow.input.existingFiles[
-                    `${taskId}.${output.id}`
-                ].path
-            ),
-        });
-
-        return workflow;
     }
 
 
@@ -1643,7 +1476,7 @@ export function createWorkflowExecutionController({
                 const responseText = await sendPromptWithDependencies({
                     prompt,
                     workflow,
-                    definition: executionDefinition,
+                    definition,
                     readFile,
                     writeFile,
                     listFiles,
