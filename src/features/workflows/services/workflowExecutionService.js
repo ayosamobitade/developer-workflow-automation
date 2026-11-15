@@ -142,37 +142,37 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         {
             taskId: "create_model",
             outputId: "model",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)models\\/(.+\\/)?([^/]+)\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)models\/(.+\/)?([^/]+)\.py$/),
         },
         {
             taskId: "create_factory_and_model_test",
             outputId: "model_factory",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/factories\\/([^/]+)_factory\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)tests\/factories\/([^/]+)_factory\.py$/),
         },
         {
             taskId: "create_factory_and_model_test",
             outputId: "model_test",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/models\\/test_([^/]+)\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)tests\/models\/test_([^/]+)\.py$/),
         },
         {
             taskId: "create_selector",
             outputId: "selector",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)selectors\\/(.+\\/)?([^/]+)_selector\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)selectors\/(.+\/)?([^/]+)_selector\.py$/),
         },
         {
             taskId: "create_selector_test",
             outputId: "selector_test",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/selectors\\/(.+\\/)?test_([^/]+)_selector\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)tests\/selectors\/(.+\/)?test_([^/]+)_selector\.py$/),
         },
         {
             taskId: "create_service",
             outputId: "service",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)services\\/(.+\\/)?([^/]+)_service\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)services\/(.+\/)?([^/]+)_service\.py$/),
         },
         {
             taskId: "create_service_test",
             outputId: "service_test",
-            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/services\\/(.+\\/)?test_([^/]+)_service\\.py$/),
+            match: dependencyPath.match(/^(.*?)(?:^|\/)tests\/services\/(.+\/)?test_([^/]+)_service\.py$/),
         },
     ];
 
@@ -189,8 +189,8 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
     let modelName = "";
 
     if (match.taskId === "create_model") {
-        appRoot = groups[1].replace(/\\/$/, "");
-        modelGroup = groups[2] || "";
+        appRoot = groups[1].replace(/\/$/, "");
+        modelGroup = (groups[2] || "").replace(/\/$/, "");
         modelName = groups[3];
     } else if (
         match.taskId === "create_selector" ||
@@ -198,14 +198,14 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         match.taskId === "create_service" ||
         match.taskId === "create_service_test"
     ) {
-        appRoot = groups[1].replace(/\\/$/, "");
-        modelGroup = groups[2] || "";
+        appRoot = groups[1].replace(/\/$/, "");
+        modelGroup = (groups[2] || "").replace(/\/$/, "");
         modelName = groups[3];
     } else {
-        appRoot = groups[1].replace(/\\/$/, "");
+        appRoot = groups[1].replace(/\/$/, "");
         modelName = groups[2];
         const selectedPath = workflow.input?.modelPath || "";
-        const selectedName = selectedPath.split("/").at(-1)?.replace(/\\.py$/i, "");
+        const selectedName = selectedPath.split("/").at(-1)?.replace(/\.py$/i, "");
         if (selectedName === modelName) {
             const segments = selectedPath.split("/");
             const modelsIndex = segments.lastIndexOf("models");
@@ -220,21 +220,21 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         appRoot,
         "models",
         modelGroup,
-        `${modelName}.py`,
+        \`\${modelName}.py\`,
     ].filter(Boolean).join("/");
 
     const selectorPath = [
         appRoot,
         "selectors",
         modelGroup,
-        `${modelName}_selector.py`,
+        \`\${modelName}_selector.py\`,
     ].filter(Boolean).join("/");
 
     const servicePath = [
         appRoot,
         "services",
         modelGroup,
-        `${modelName}_service.py`,
+        \`\${modelName}_service.py\`,
     ].filter(Boolean).join("/");
 
     const sourcePaths = {
@@ -250,7 +250,7 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
             const path = sourcePaths[source.id];
             if (!path) {
                 throw new Error(
-                    `Cannot infer the source path for dependency "${source.id}" required by "${dependencyPath}".`
+                    \`Cannot infer the source path for dependency "\${source.id}" required by "\${dependencyPath}".\`
                 );
             }
             return {
@@ -266,7 +266,6 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         output,
     };
 }
-
 
 function findDependencyOutput({
     workflow,
