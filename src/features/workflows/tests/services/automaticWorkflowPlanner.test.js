@@ -68,7 +68,7 @@ test("rejects invalid model paths and unreadable existing files", async () => {
             listFiles: async () => [],
             readFile: async () => ({ content: "" }),
         }),
-        /Invalid project-relative path/
+        /Invalid project-relative Python path/
     );
 
     await assert.rejects(
