@@ -381,7 +381,14 @@ export function generateWorkflowPrompt({
         "10. Preserve all Python indentation using four spaces per indentation level.",
         "11. Do not include explanations, commentary, or Markdown headings between output markers.",
         "12. Never generate, modify, or include Python __init__.py files.",
-        "13. If a requirement is ambiguous or necessary information is missing, explain the issue instead of inventing implementation details.",
+        "13. If a required project source file is missing from the supplied sources and the project tree, do not invent its contents or silently omit it.",
+        "14. In that case, stop before generating the requested deliverables and return this exact dependency request block with valid JSON between the markers:",
+        "<<<PROMPTFLOW_DEPENDENCY_REQUEST_START>>>",
+        "{\\"path\\": \\"project/relative/path/to/file.py\\", \\"reason\\": \\"Why this file is required\\", \\"requiredFor\\": \\"Which requested output needs it\\"}",
+        "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>",
+        "15. Request one dependency file at a time. PromptFlow will retrieve it if it exists, or ask you to generate and save it if it is missing, then resend the original task with the file contents.",
+        "16. Do not ask the user to paste a project file that PromptFlow can read through the connected native project.",
+        "17. Only use project-relative paths. Never request absolute paths, paths containing .., or __init__.py files.",
     ].join("\n"));
 
     return sections.join("\n\n");
