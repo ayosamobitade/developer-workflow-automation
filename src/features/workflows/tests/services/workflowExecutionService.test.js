@@ -723,7 +723,7 @@ test(
         assert.match(originalPrompts[0], /TASK INSTRUCTIONS/);
         assert.equal(sentPrompts[0], sentPrompts[2]);
         assert.equal(environment.calls.writeFile.length, 1);
-        assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT);
+        assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT.trimEnd());
     }
 );
 
