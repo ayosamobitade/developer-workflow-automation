@@ -41,6 +41,7 @@ import {
 import {
     discoverDjangoModelFiles,
     createWorkflowBatch,
+    updateWorkflowBatchSelection,
     retryBatchModel,
     skipBatchModel,
     getBatchProgress,
@@ -1421,7 +1422,12 @@ async function executeWorkflow(initialWorkflow) {
             return;
         }
 
-        if (batch && [
+        const canUpdateCurrentBatch =
+            batch?.status === BATCH_STATUS.READY &&
+            batch.project?.id === nativeProjectId &&
+            (batch.workingDirectory || "") === (nativeWorkingDirectory || "");
+
+        if (batch && !canUpdateCurrentBatch && [
             BATCH_STATUS.READY,
             BATCH_STATUS.RUNNING,
             BATCH_STATUS.PAUSED,
@@ -1438,19 +1444,22 @@ async function executeWorkflow(initialWorkflow) {
         setNotice("");
 
         try {
-            const newBatch = await createWorkflowBatch({
-                tabId: activeTabId,
-                projectId: nativeProjectId,
-                projectName: nativeProjectName,
-                workingDirectory: nativeWorkingDirectory || "",
-                projectTree: treeText,
-
-                // Manual/automatic is independent of single/batch UI.
-                mode: batchMode,
-
-                // Model source is detected automatically from the project.
-                models: selectedModels,
-            });
+            const newBatch = canUpdateCurrentBatch
+                ? await updateWorkflowBatchSelection({
+                    tabId: activeTabId,
+                    batchId: batch.id,
+                    models: selectedModels,
+                    sourceMode,
+                })
+                : await createWorkflowBatch({
+                    tabId: activeTabId,
+                    projectId: nativeProjectId,
+                    projectName: nativeProjectName,
+                    workingDirectory: nativeWorkingDirectory || "",
+                    projectTree: treeText,
+                    mode: batchMode,
+                    models: selectedModels,
+                });
 
             setBatch(newBatch);
             setWorkflow(null);
@@ -1459,7 +1468,7 @@ async function executeWorkflow(initialWorkflow) {
             setExecutionMode("batch");
 
             setNotice(
-                `${newBatch.models.length} model(s) added to the batch.`
+                `${newBatch.models.length} model(s) in the execution list.`
             );
 
         } catch (err) {
