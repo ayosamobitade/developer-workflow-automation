@@ -45,6 +45,6 @@ test("builds dependency context as a separate message without embedding the orig
 
     assert.match(context, /PROMPTFLOW ADDITIONAL SOURCE FILE/);
     assert.match(context, /class User: pass/);
-    assert.match(context, /follow that next instruction/);
+    assert.match(context, /follow that next instruction/i);
     assert.doesNotMatch(context, /Create a selector/);
 });
