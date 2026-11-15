@@ -160,6 +160,7 @@ function createExecutionEnvironment({
     workflow,
     initialFiles = {},
     sendPrompt,
+    definition = MODEL_RECOVERY_WORKFLOW,
 } = {}) {
     const files = new Map(
         Object.entries(initialFiles)
@@ -174,7 +175,7 @@ function createExecutionEnvironment({
     };
 
     const controller = createWorkflowExecutionController({
-        definition: MODEL_RECOVERY_WORKFLOW,
+        definition,
 
         readFile: async (path) => {
             calls.readFile.push(path);
@@ -243,6 +244,121 @@ async function executeRecovery(environment) {
     });
 }
 
+
+
+const PARTIAL_FACTORY_WORKFLOW = {
+    ...DJANGO_MODEL_WORKFLOW,
+    tasks: DJANGO_MODEL_WORKFLOW.tasks.filter((task) =>
+        ["create_model", "create_factory_and_model_test"].includes(task.id)
+    ),
+};
+
+
+test(
+    "resumes a multi-output stage by preserving existing factory and creating only the missing model test",
+    async () => {
+        const factoryPath =
+            "core/finance/payments/tests/factories/payment_factory.py";
+        const modelTestPath =
+            "core/finance/payments/tests/models/test_payment.py";
+        const factoryContent =
+            "class PaymentFactory:\\n    pass\\n";
+        const modelTestContent =
+            "class PaymentTest:\\n    pass\\n";
+
+        const workflow = createWorkflowInstance({
+            definition: PARTIAL_FACTORY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree: [
+                MODEL_PATH,
+                factoryPath,
+                modelTestPath,
+            ].join("\\n"),
+            explicitDestinations: {
+                "create_factory_and_model_test.model_test": modelTestPath,
+            },
+        });
+
+        workflow.input.existingFiles = {
+            "create_model.model": {
+                path: MODEL_PATH,
+                content: MODEL_CONTENT,
+            },
+            "create_factory_and_model_test.model_factory": {
+                path: factoryPath,
+                content: factoryContent,
+            },
+        };
+        workflow.input.automaticContinuation = true;
+        workflow.input.implementationPlan = {
+            modelPath: MODEL_PATH,
+            existingFiles: workflow.input.existingFiles,
+            deliverables: [
+                {
+                    taskId: "create_model",
+                    outputId: "model",
+                    path: MODEL_PATH,
+                    status: "existing",
+                    hasContent: true,
+                },
+                {
+                    taskId: "create_factory_and_model_test",
+                    outputId: "model_factory",
+                    path: factoryPath,
+                    status: "existing",
+                    hasContent: true,
+                },
+                {
+                    taskId: "create_factory_and_model_test",
+                    outputId: "model_test",
+                    path: modelTestPath,
+                    status: "missing",
+                    hasContent: false,
+                },
+            ],
+        };
+
+        const environment = createExecutionEnvironment({
+            workflow,
+            definition: PARTIAL_FACTORY_WORKFLOW,
+            initialFiles: {
+                [MODEL_PATH]: MODEL_CONTENT,
+                [factoryPath]: factoryContent,
+            },
+            sendPrompt: async (prompt) => {
+                assert.match(prompt, /model_test/);
+                assert.doesNotMatch(prompt, /<<<PROMPTFLOW_OUTPUT_START:model_factory>>>/);
+                return [
+                    "<<<PROMPTFLOW_OUTPUT_START:model_test>>>",
+                    modelTestContent,
+                    "<<<PROMPTFLOW_OUTPUT_END:model_test>>>",
+                ].join("\\n");
+            },
+        });
+
+        const result = await environment.controller.run({
+            tabId: 10,
+            workflow,
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(environment.calls.sendPrompt, 1);
+        assert.deepEqual(
+            environment.calls.writeFile.map((item) => item.path),
+            [modelTestPath]
+        );
+        assert.equal(environment.files.get(factoryPath), factoryContent);
+        assert.equal(environment.files.get(modelTestPath), modelTestContent);
+        assert.equal(
+            result.workflow.tasks.find(
+                (task) => task.id === "create_factory_and_model_test"
+            ).status,
+            "completed"
+        );
+    }
+);
 
 test(
     "assesses and skips a complete existing model without rewriting it",
