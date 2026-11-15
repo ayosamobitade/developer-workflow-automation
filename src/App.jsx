@@ -4,7 +4,7 @@ import DjangoModelWorkflowPanel from "./features/workflows/components/DjangoMode
 import { generateFileTree } from "./features/file-tree/treeGenerator";
 
 const NATIVE_MESSAGE_TYPE = "PROMPTFLOW_NATIVE";
-const WORKSPACE_STORAGE_PREFIX = "promptflow_native_workspace_";
+const WORKSPACE_STORAGE_PREFIX = "promptflow_workspace_";
 const SESSION_RENEWAL_BUFFER_SECONDS = 60;
 
 async function sendNativeRequest(request) {
@@ -290,7 +290,7 @@ function App() {
         const saved = await browser.storage.local.get(key);
         const workspace = saved[key];
 
-        if (!workspace?.projectId) {
+        if (!(workspace?.nativeProjectId || workspace?.projectId)) {
             setNativeProjectId("");
             setNativeProjectName("");
             setNativeWorkingDirectory("");
@@ -300,16 +300,16 @@ function App() {
             return;
         }
 
-        setNativeProjectId(workspace.projectId);
-        setNativeProjectName(workspace.projectName || "");
-        setNativeWorkingDirectory(workspace.workingDirectory || "");
+        setNativeProjectId(workspace.nativeProjectId || workspace.projectId);
+        setNativeProjectName(workspace.nativeProjectName || workspace.projectName || "");
+        setNativeWorkingDirectory(workspace.nativeWorkingDirectory || workspace.workingDirectory || "");
 
         try {
-            const rootToken = await ensureReadSession(workspace.projectId, "", tabId);
+            const rootToken = await ensureReadSession(workspace.nativeProjectId || workspace.projectId, "", tabId);
             const [allFilesResponse, directoryResponse] = await Promise.all([
                 sendNativeRequest({
                     action: "list_files",
-                    project_id: workspace.projectId,
+                    project_id: workspace.nativeProjectId || workspace.projectId,
                     directory: "",
                     token: rootToken,
                 }),
@@ -322,7 +322,7 @@ function App() {
             ]);
             const scopedToken = await ensureReadSession(
                 workspace.projectId,
-                workspace.workingDirectory || "",
+                workspace.nativeWorkingDirectory || workspace.workingDirectory || "",
                 tabId
             );
             const scopedResponse = await sendNativeRequest({
@@ -335,7 +335,7 @@ function App() {
             setNativeProjectDirectories(directoryResponse.directories || []);
             setNativeConnected(true);
             setNativeVersion("");
-            setNotice(`${workspace.projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
+            setNotice(`${workspace.nativeProjectName || workspace.projectName} restored. ${(allFilesResponse.files || []).length} project files detected.`);
         } catch (restoreError) {
             await revokeTabSessions(tabId);
             setNativeProjectId("");
@@ -395,9 +395,9 @@ function App() {
         }
         void browser.storage.local.set({
             [key]: {
-                projectId: nativeProjectId,
-                projectName: nativeProjectName,
-                workingDirectory: nativeWorkingDirectory,
+                nativeProjectId,
+                nativeProjectName,
+                nativeWorkingDirectory,
             },
         });
     }, [activeTabId, nativeProjectId, nativeProjectName, nativeWorkingDirectory, workspaceReady]);
