@@ -305,6 +305,84 @@ export default function DjangoModelWorkflowPanel({
             }
 
             switch (message.event) {
+                case "batch_started":
+                    setIsRunning(true);
+                    setIsStopping(false);
+                    setError("");
+                    break;
+
+                case "batch_state_changed":
+                    if (message.batch) {
+                        setBatch(message.batch);
+                    }
+                    break;
+
+                case "batch_workflow_state_changed":
+                    if (message.workflow) {
+                        setWorkflow(message.workflow);
+                    }
+                    break;
+
+                case "batch_workflow_event":
+                    if (message.workflowEvent) {
+                        setEvents((previous) => [
+                            ...previous,
+                            message.workflowEvent,
+                        ].slice(-40));
+                    }
+                    break;
+
+                case "batch_model_changed":
+                    if (message.modelEvent) {
+                        const modelEvent = message.modelEvent;
+                        setEvents((previous) => [
+                            ...previous,
+                            {
+                                type: modelEvent.type,
+                                message: modelEvent.model?.path || "",
+                                timestamp: new Date().toISOString(),
+                            },
+                        ].slice(-40));
+
+                        if (modelEvent.model?.workflow) {
+                            setWorkflow(modelEvent.model.workflow);
+                        }
+                    }
+                    break;
+
+                case "batch_finished": {
+                    const result = message.result;
+
+                    if (result?.batch) setBatch(result.batch);
+                    setIsRunning(false);
+                    setIsStopping(false);
+                    executionContextRef.current = null;
+
+                    if (result?.batch?.status === BATCH_STATUS.COMPLETED) {
+                        setNotice("All selected model workflows have been processed.");
+                        setError("");
+                    } else if (result?.batch?.status === BATCH_STATUS.PAUSED) {
+                        setNotice(
+                            result.batch.awaitingNext
+                                ? "The model workflow is complete. Start the next model when ready."
+                                : "Batch paused. You can resume it at any time."
+                        );
+                    } else if (result?.batch?.status === BATCH_STATUS.STOPPED) {
+                        setNotice("Batch stopped. Completed models and saved progress have been preserved.");
+                    } else if (result?.batch?.status === BATCH_STATUS.FAILED || !result?.success) {
+                        setError(result?.error || "A model workflow failed. Retry or skip that model to continue.");
+                    }
+                    break;
+                }
+
+                case "batch_failed":
+                case "batch_start_failed":
+                    setIsRunning(false);
+                    setIsStopping(false);
+                    executionContextRef.current = null;
+                    setError(message.error || "Background batch execution failed.");
+                    break;
+
                 case "workflow_started":
                     setIsRunning(true);
                     setIsStopping(false);
@@ -415,6 +493,31 @@ export default function DjangoModelWorkflowPanel({
                     null;
 
                 setBatch(savedBatch);
+
+                if (savedBatch?.id) {
+                    try {
+                        const executionStatus = await browser.runtime.sendMessage({
+                            type: "PROMPTFLOW_BACKGROUND_WORKFLOW_STATUS",
+                            workflowTabId: activeTabId,
+                        });
+
+                        const activeBatchRun =
+                            executionStatus?.run?.runType === "batch" &&
+                            executionStatus.run.batchId === savedBatch.id;
+
+                        setIsRunning(Boolean(activeBatchRun));
+
+                        if (activeBatchRun) {
+                            executionContextRef.current = {
+                                tabId: activeTabId,
+                                projectId: savedBatch.project?.id,
+                                workingDirectory: savedBatch.workingDirectory || "",
+                            };
+                        }
+                    } catch {
+                        // The saved batch remains available even if status lookup fails.
+                    }
+                }
 
                 const currentBatchModel =
                     savedBatch?.models?.[
@@ -1433,7 +1536,8 @@ async function executeWorkflow(initialWorkflow) {
         if (
             !batch ||
             isRunning ||
-            !nativeProjectId
+            !nativeProjectId ||
+            !Number.isInteger(activeTabId)
         ) {
             return;
         }
@@ -1450,175 +1554,54 @@ async function executeWorkflow(initialWorkflow) {
         }
 
         try {
-            await ensureWriteAuthorization();
+            const { readToken, writeToken } =
+                await getWorkflowAuthorization();
 
-        } catch (err) {
-            setError(
-                err.message ||
-                "Local write authorization is required before running the batch."
-            );
-            return;
-        }
+            if (!readToken || !writeToken) {
+                throw new Error(
+                    "Project authorization is incomplete. Reauthorize project access and try again."
+                );
+            }
 
-        const runTabId = activeTabId;
-        const runProjectId = nativeProjectId;
-        const runWorkingDirectory =
-            nativeWorkingDirectory || "";
-
-        stopRequestedRef.current = false;
-
-        executionContextRef.current = {
-            tabId: runTabId,
-            projectId: runProjectId,
-            workingDirectory: runWorkingDirectory,
-        };
-
-        setIsRunning(true);
-        setIsStopping(false);
-        setError("");
-        setNotice("");
-        setEvents([]);
-
-        try {
-            const result = await startWorkflowBatch({
-                tabId: runTabId,
+            const response = await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_BATCH_START",
                 batchId: batch.id,
-
-                readFile: async (path) => (
-                    readNativeProjectFile(
-                        runProjectId,
-                        path,
-                        runWorkingDirectory
-                    )
-                ),
-
-                runModel: async ({
-                    workflow: modelWorkflow,
-                    sourceMode: preparationMode,
-                    onWorkflowChange,
-                }) => {
-                    if (
-                        activeTabIdRef.current !== runTabId ||
-                        nativeProjectIdRef.current !== runProjectId ||
-                        nativeWorkingDirectoryRef.current !==
-                            runWorkingDirectory
-                    ) {
-                        throw new Error(
-                            "The active project context changed during batch execution."
-                        );
-                    }
-
-                    setWorkflow(modelWorkflow);
-
-                    return runWorkflowController({
-                        initialWorkflow: modelWorkflow,
-                        runTabId,
-                        runProjectId,
-                        runWorkingDirectory,
-                        preparationMode,
-                        onWorkflowChange,
-                        preserveExecutionContext: true,
-                    });
-                },
-
-                onBatchChange: (updatedBatch) => {
-                    if (
-                        mountedRef.current &&
-                        activeTabIdRef.current === runTabId
-                    ) {
-                        setBatch(updatedBatch);
-                    }
-                },
-
-                onModelChange: (event) => {
-                    if (
-                        mountedRef.current &&
-                        activeTabIdRef.current === runTabId
-                    ) {
-                        setEvents((previous) => [
-                            ...previous,
-                            {
-                                type: event.type,
-                                message: event.model?.path || "",
-                                timestamp: new Date().toISOString(),
-                            },
-                        ].slice(-40));
-
-                        if (event.model?.workflow) {
-                            setWorkflow(event.model.workflow);
-                        }
-                    }
-                },
+                workflowTabId: activeTabId,
+                chatTabId: activeTabId,
+                projectId: nativeProjectId,
+                workingDirectory: nativeWorkingDirectory || "",
+                readToken,
+                writeToken,
             });
 
-            if (
-                !mountedRef.current ||
-                activeTabIdRef.current !== runTabId ||
-                nativeProjectIdRef.current !== runProjectId
-            ) {
-                return;
-            }
-
-            if (result?.batch) {
-                setBatch(result.batch);
-            }
-
-            if (
-                result?.batch?.status === BATCH_STATUS.COMPLETED
-            ) {
-                setNotice(
-                    "All selected model workflows have been processed."
-                );
-
-            } else if (
-                result?.batch?.status === BATCH_STATUS.PAUSED
-            ) {
-                setNotice(
-                    result.batch.awaitingNext
-                        ? "The model workflow is complete. Start the next model when ready."
-                        : "Batch paused. You can resume it at any time."
-                );
-
-            } else if (
-                result?.batch?.status === BATCH_STATUS.STOPPED
-            ) {
-                setNotice(
-                    "Batch stopped. Completed models and saved progress have been preserved."
-                );
-
-            } else if (
-                result?.batch?.status === BATCH_STATUS.FAILED
-            ) {
-                setError(
-                    result.error ||
-                    "A model workflow failed. Retry or skip that model to continue."
+            if (!response?.success || !response.accepted) {
+                throw new Error(
+                    response?.error ||
+                    "The background batch could not be started."
                 );
             }
+
+            stopRequestedRef.current = false;
+            executionContextRef.current = {
+                tabId: activeTabId,
+                projectId: nativeProjectId,
+                workingDirectory: nativeWorkingDirectory || "",
+            };
+
+            setIsRunning(true);
+            setIsStopping(false);
+            setError("");
+            setNotice(
+                "Batch accepted by the background coordinator. It will continue when the sidebar is closed or you switch tabs."
+            );
 
         } catch (err) {
             setError(
                 err.message ||
-                "Unable to execute the model batch."
+                "Unable to start the background batch."
             );
-
-        } finally {
-            const execution = executionContextRef.current;
-
-            if (
-                execution?.tabId === runTabId &&
-                execution?.projectId === runProjectId &&
-                execution?.workingDirectory === runWorkingDirectory
-            ) {
-                executionContextRef.current = null;
-            }
-
-            if (mountedRef.current) {
-                setIsRunning(false);
-                setIsStopping(false);
-            }
         }
     }
-
 
     // ---------------------------------------------------------
     // PAUSE BATCH
@@ -1628,12 +1611,19 @@ async function executeWorkflow(initialWorkflow) {
         if (!batch) return;
 
         try {
-            const updated = await pauseWorkflowBatch(
-                activeTabId,
-                batch.id
-            );
+            const response = await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_BATCH_PAUSE",
+                workflowTabId: activeTabId,
+                batchId: batch.id,
+            });
 
-            setBatch(updated);
+            if (!response?.success) {
+                throw new Error(
+                    response?.error || "Unable to pause the batch."
+                );
+            }
+
+            if (response.batch) setBatch(response.batch);
 
             setNotice(
                 "Pause requested. The current model will finish before the batch pauses."
@@ -1656,13 +1646,21 @@ async function executeWorkflow(initialWorkflow) {
         if (!batch) return;
 
         try {
-            const updated = await stopWorkflowBatch(
-                activeTabId,
-                batch.id
-            );
+            const response = await browser.runtime.sendMessage({
+                type: "PROMPTFLOW_BACKGROUND_BATCH_STOP",
+                workflowTabId: activeTabId,
+                batchId: batch.id,
+            });
 
-            setBatch(updated);
+            if (!response?.success) {
+                throw new Error(
+                    response?.error || "Unable to stop the batch."
+                );
+            }
 
+            if (response.batch) setBatch(response.batch);
+
+            setIsStopping(true);
             setNotice(
                 "Stop requested. The current model will finish before the batch stops."
             );
@@ -1675,6 +1673,9 @@ async function executeWorkflow(initialWorkflow) {
         }
     }
 
+
+    // ---------------------------------------------------------
+    // RETRY FAILED BATCH MODEL
 
     // ---------------------------------------------------------
     // RETRY FAILED BATCH MODEL
