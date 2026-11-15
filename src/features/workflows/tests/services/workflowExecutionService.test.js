@@ -351,7 +351,7 @@ test(
             [modelTestPath]
         );
         assert.equal(environment.files.get(factoryPath), factoryContent);
-        assert.equal(environment.files.get(modelTestPath), modelTestContent);
+        assert.equal(environment.files.get(modelTestPath), modelTestContent.trimEnd());
         assert.equal(
             result.workflow.tasks.find(
                 (task) => task.id === "create_factory_and_model_test"
@@ -595,7 +595,7 @@ test(
 
         assert.match(
             result.error,
-            /Recovery conflict/
+            /Protected-file conflict/
         );
 
         assert.equal(
