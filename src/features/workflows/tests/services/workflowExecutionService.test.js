@@ -344,7 +344,7 @@ test(
         });
 
         assert.equal(result.success, true);
-        assert.equal(environment.calls.sendPrompt, 0);
+        assert.equal(environment.calls.sendPrompt, 1);
         assert.deepEqual(
             environment.calls.writeFile.map((item) => item.path),
             [modelTestPath]
@@ -417,7 +417,7 @@ test(
 
         assert.equal(result.success, true);
         assert.equal(result.workflow.status, "completed");
-        assert.equal(environment.calls.sendPrompt, 1);
+        assert.equal(environment.calls.sendPrompt, 0);
         assert.equal(environment.calls.writeFile.length, 0);
         assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT);
         assert.equal(
