@@ -43,9 +43,6 @@ import {
 import {
     discoverDjangoModelFiles,
     createWorkflowBatch,
-    startWorkflowBatch,
-    pauseWorkflowBatch,
-    stopWorkflowBatch,
     retryBatchModel,
     skipBatchModel,
     getBatchProgress,
@@ -211,7 +208,6 @@ export default function DjangoModelWorkflowPanel({
     readNativeProjectFile,
     writeNativeProjectFile,
     getNativeProjectFiles,
-    ensureWriteAuthorization,
     getWorkflowAuthorization,
     sendPromptToChatGPT,
 }) {
@@ -447,6 +443,31 @@ export default function DjangoModelWorkflowPanel({
         browser.runtime.onMessage.addListener(
             handleBackgroundMessage
         );
+
+        browser.runtime.sendMessage({
+            type: "PROMPTFLOW_BACKGROUND_PENDING_CONFIRMATIONS",
+            workflowTabId: activeTabIdRef.current,
+        }).then((response) => {
+            const request = response?.requests?.[0];
+
+            if (
+                !request ||
+                request.workflowTabId !== activeTabIdRef.current
+            ) {
+                return;
+            }
+
+            setDestinationDialog({
+                requestId: request.requestId,
+                taskId: request.taskId,
+                entries: getDestinationEntries(
+                    request.destinations,
+                    request.taskId
+                ),
+            });
+        }).catch(() => {
+            // Confirmation recovery is best-effort; the active run remains in the background.
+        });
 
         return () => {
             browser.runtime.onMessage.removeListener(
