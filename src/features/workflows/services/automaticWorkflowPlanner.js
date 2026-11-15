@@ -98,12 +98,14 @@ const TASK_COMPLETENESS_RULES = Object.freeze({
     create_service_test: "Confirm meaningful tests cover the service's public operations, successful paths, validation failures, edge cases and transactional/business behavior.",
 });
 
-export function buildImplementationAssessmentPrompt(plan, definition) {
+export function buildImplementationAssessmentPrompt(plan, definition, taskIds = null) {
     if (!plan || !Array.isArray(plan.deliverables) || !definition?.tasks) {
         throw new TypeError("A valid implementation plan and workflow definition are required.");
     }
 
+    const selectedTaskIds = taskIds ? new Set(taskIds) : null;
     const candidates = definition.tasks.filter((task) => {
+        if (selectedTaskIds && !selectedTaskIds.has(task.id)) return false;
         const outputs = plan.deliverables.filter((item) => item.taskId === task.id);
         return outputs.length === task.outputs.length &&
             outputs.every((item) => item.status === "existing");
