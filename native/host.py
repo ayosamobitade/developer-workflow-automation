@@ -1391,11 +1391,22 @@ def handle_request(request):
             )
 
         if action == "read_file":
-            return read_project_file(
-                project_id,
-                request.get("path"),
-                directory=authorized_directory,
-            )
+            relative_path = request.get("path")
+            try:
+                return read_project_file(
+                    project_id,
+                    relative_path,
+                    directory=authorized_directory,
+                )
+            except FileNotFoundError:
+                # A missing dependency is a valid lookup result. Keep it
+                # distinct from permission, scope, and other read failures.
+                return {
+                    "ok": True,
+                    "path": relative_path,
+                    "exists": False,
+                    "content": None,
+                }
 
     if action == "write_file":
         session = validate_authorization_session(
