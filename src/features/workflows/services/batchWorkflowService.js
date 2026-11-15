@@ -687,6 +687,7 @@ async function prepareModelWorkflow({
     batch,
     model,
     readFile,
+    listFiles,
     definition,
 }) {
     let workflow = model.workflow;
@@ -697,6 +698,18 @@ async function prepareModelWorkflow({
             model,
             definition,
         });
+    }
+
+    if (typeof listFiles === "function") {
+        const implementationPlan = await planAutomaticWorkflow({
+            modelPath: model.path,
+            listFiles,
+            readFile,
+        });
+
+        workflow.input.existingFiles = implementationPlan.existingFiles;
+        workflow.input.implementationPlan = implementationPlan;
+        workflow.input.automaticContinuation = true;
     }
 
     if (
@@ -775,6 +788,7 @@ export async function startWorkflowBatch({
     batchId,
     runModel,
     readFile,
+    listFiles,
     definition = DJANGO_MODEL_WORKFLOW,
     onBatchChange = () => {},
     onModelChange = () => {},
@@ -980,6 +994,7 @@ export async function startWorkflowBatch({
                         workflow,
                     },
                     readFile,
+                    listFiles,
                     definition,
                 });
 
