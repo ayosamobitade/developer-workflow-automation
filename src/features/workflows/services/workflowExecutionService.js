@@ -142,7 +142,7 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         {
             taskId: "create_model",
             outputId: "model",
-            match: dependencyPath.match(/^(.*?)(?:^|\/)models\/(.+\/)?([^/]+)\.py$/),
+            match: dependencyPath.match(/^(?!.*\/tests\/)(.*?)(?:^|\/)models\/(.+\/)?([^/]+)\.py$/),
         },
         {
             taskId: "create_factory_and_model_test",
@@ -157,7 +157,7 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         {
             taskId: "create_selector",
             outputId: "selector",
-            match: dependencyPath.match(/^(.*?)(?:^|\/)selectors\/(.+\/)?([^/]+)_selector\.py$/),
+            match: dependencyPath.match(/^(?!.*\/tests\/)(.*?)(?:^|\/)selectors\/(.+\/)?([^/]+)_selector\.py$/),
         },
         {
             taskId: "create_selector_test",
@@ -167,7 +167,7 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         {
             taskId: "create_service",
             outputId: "service",
-            match: dependencyPath.match(/^(.*?)(?:^|\/)services\/(.+\/)?([^/]+)_service\.py$/),
+            match: dependencyPath.match(/^(?!.*\/tests\/)(.*?)(?:^|\/)services\/(.+\/)?([^/]+)_service\.py$/),
         },
         {
             taskId: "create_service_test",
