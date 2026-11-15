@@ -243,10 +243,33 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         service: servicePath,
     };
 
+    const selectedModelPath = (workflow.input?.modelPath || "").replace(/\\\\/g, "/");
+    const dependencyModelPath = modelPath.replace(/\\\\/g, "/");
+    const usesSelectedModel = selectedModelPath === dependencyModelPath;
+
+    const sourceOutputIds = {
+        model: ["create_model", "model"],
+        selector: ["create_selector", "selector"],
+        service: ["create_service", "service"],
+    };
+
     const dependencyTask = {
         ...task,
         sources: task.sources.map((source) => {
             if (source.type === "project_tree") return source;
+
+            // Prefer the current workflow's already-generated implementation
+            // when this dependency belongs to the selected model.
+            const sourceOutput = sourceOutputIds[source.id];
+            if (usesSelectedModel && sourceOutput) {
+                const output = workflow.tasks
+                    ?.find((item) => item.id === sourceOutput[0])
+                    ?.outputs?.find((item) => item.id === sourceOutput[1]);
+                if (typeof output?.content === "string" && output.content.trim()) {
+                    return source;
+                }
+            }
+
             const path = sourcePaths[source.id];
             if (!path) {
                 throw new Error(
