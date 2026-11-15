@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 
 import {
     planAutomaticWorkflow,
+    buildImplementationAssessmentPrompt,
+    parseImplementationAssessment,
 } from "../../services/automaticWorkflowPlanner.js";
+
+import {
+    DJANGO_MODEL_WORKFLOW,
+} from "../../definitions/django-model-workflow.js";
 
 const modelPath =
     "core/website/content/models/content_composition_and_structure/website_content_section.py";
@@ -78,5 +84,76 @@ test("rejects invalid model paths and unreadable existing files", async () => {
             readFile: async () => null,
         }),
         /Unable to inspect existing file/
+    );
+});
+
+
+test("builds a focused assessment prompt for existing deliverables", async () => {
+    const plan = await planAutomaticWorkflow({
+        modelPath,
+        listFiles: async () => [
+            modelPath,
+            "core/website/content/selectors/content_composition_and_structure/website_content_section_selector.py",
+        ],
+        readFile: async (path) => ({
+            content: path === modelPath
+                ? "class WebsiteContentSection(models.Model):\\n    title = models.CharField(max_length=100)\\n"
+                : "class WebsiteContentSectionSelector:\\n    pass\\n",
+        }),
+    });
+
+    const prompt = buildImplementationAssessmentPrompt(
+        plan,
+        DJANGO_MODEL_WORKFLOW,
+        ["create_model"]
+    );
+
+    assert.match(prompt, /TASK: create_model/);
+    assert.match(prompt, /class WebsiteContentSection/);
+    assert.doesNotMatch(prompt, /TASK: create_selector/);
+});
+
+test("only accepts explicit COMPLETE assessments for fully existing task outputs", async () => {
+    const plan = {
+        deliverables: [
+            {
+                taskId: "create_model",
+                outputId: "model",
+                status: "existing",
+            },
+            {
+                taskId: "create_factory_and_model_test",
+                outputId: "model_factory",
+                status: "existing",
+            },
+            {
+                taskId: "create_factory_and_model_test",
+                outputId: "model_test",
+                status: "missing",
+            },
+        ],
+    };
+
+    const response = JSON.stringify({
+        tasks: {
+            create_model: "COMPLETE",
+            create_factory_and_model_test: "COMPLETE",
+            create_selector: "COMPLETE",
+        },
+    });
+
+    const statuses = parseImplementationAssessment(
+        response,
+        plan,
+        DJANGO_MODEL_WORKFLOW
+    );
+
+    assert.equal(statuses.create_model, "COMPLETE");
+    assert.equal(statuses.create_factory_and_model_test, "NEEDS_WORK");
+    assert.equal(statuses.create_selector, "NEEDS_WORK");
+    assert.equal(
+        parseImplementationAssessment("not json", plan, DJANGO_MODEL_WORKFLOW)
+            .create_model,
+        "NEEDS_WORK"
     );
 });
