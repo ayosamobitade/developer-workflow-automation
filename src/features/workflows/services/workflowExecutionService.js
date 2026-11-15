@@ -243,8 +243,8 @@ function inferDependencyTask(dependencyPath, definition, workflow) {
         service: servicePath,
     };
 
-    const selectedModelPath = (workflow.input?.modelPath || "").replace(/\\\\/g, "/");
-    const dependencyModelPath = modelPath.replace(/\\\\/g, "/");
+    const selectedModelPath = (workflow.input?.modelPath || "").replace(/\\/g, "/");
+    const dependencyModelPath = modelPath.replace(/\\/g, "/");
     const usesSelectedModel = selectedModelPath === dependencyModelPath;
 
     const sourceOutputIds = {
