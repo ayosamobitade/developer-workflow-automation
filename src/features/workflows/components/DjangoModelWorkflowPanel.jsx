@@ -1583,12 +1583,8 @@ async function executeWorkflow(initialWorkflow) {
                 // Manual/automatic is independent of single/batch UI.
                 mode: batchMode,
 
-                // Keep model source separate from source preparation.
-                models: selectedModels.map((path) => ({
-                    path,
-                    modelSource: batchModelSourceMode,
-                    sourceMode,
-                })),
+                // Model source is detected automatically from the project.
+                models: selectedModels,
             });
 
             setBatch(newBatch);
@@ -1987,37 +1983,8 @@ async function executeWorkflow(initialWorkflow) {
             {executionMode === "single" && (
 
                 <>
-                    <div className="mb-3">
-
-                        <label className="mb-1 block text-xs font-semibold">
-                            Model source
-                        </label>
-
-                        <select
-                            value={modelSourceMode}
-                            onChange={(event) =>
-                                setModelSourceMode(event.target.value)
-                            }
-                            disabled={isRunning}
-                            className="w-full rounded-lg border p-3 text-xs outline-none focus:border-indigo-500 disabled:bg-slate-50"
-                        >
-                            {MODEL_SOURCE_MODES.map((mode) => (
-                                <option
-                                    key={mode.value}
-                                    value={mode.value}
-                                >
-                                    {mode.label}
-                                </option>
-                            ))}
-                        </select>
-
-                        <p className="mt-1 text-xs text-slate-500">
-                            Existing mode reads the model file and
-                            continues with the factory, tests,
-                            selector and service tasks without
-                            regenerating the model.
-                        </p>
-
+                    <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-800">
+                        PromptFlow automatically inspects the selected model, factory, tests, selector and service files. It creates missing files and continues existing implementations with backup protection.
                     </div>
 
                     <div className="mb-4">
@@ -2398,36 +2365,8 @@ async function executeWorkflow(initialWorkflow) {
 
                         </div>
 
-                        <div>
-
-                            <label className="mb-1 block text-xs font-medium">
-                                Selected model source
-                            </label>
-
-                            <select
-                                value={batchModelSourceMode}
-                                onChange={(event) =>
-                                    setBatchModelSourceMode(
-                                        event.target.value
-                                    )
-                                }
-                                disabled={!canConfigureBatch}
-                                className="w-full rounded-lg border p-3 text-xs disabled:bg-slate-50"
-                            >
-                                <option value="existing">
-                                    Continue from existing models
-                                </option>
-
-                                <option value="create">
-                                    Create models from scratch
-                                </option>
-                            </select>
-
-                            <p className="mt-1 text-xs text-slate-500">
-                                Existing mode reads each selected model
-                                and skips its model-generation task.
-                            </p>
-
+                        <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-800">
+                            Each selected model is inspected automatically. Existing implementations are continued; missing or empty files are generated.
                         </div>
 
                         {!batch || [
