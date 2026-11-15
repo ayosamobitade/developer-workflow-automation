@@ -97,7 +97,7 @@ test("builds a focused assessment prompt for existing deliverables", async () =>
         ],
         readFile: async (path) => ({
             content: path === modelPath
-                ? "class WebsiteContentSection(models.Model):\\n    title = models.CharField(max_length=100)\\n"
+                ? "# TODO: verify custom validation\\nclass WebsiteContentSection(models.Model):\\n    title = models.CharField(max_length=100)\\n"
                 : "class WebsiteContentSectionSelector:\\n    pass\\n",
         }),
     });
@@ -110,6 +110,7 @@ test("builds a focused assessment prompt for existing deliverables", async () =>
 
     assert.match(prompt, /TASK: create_model/);
     assert.match(prompt, /class WebsiteContentSection/);
+    assert.match(prompt, /TODO: verify custom validation/);
     assert.doesNotMatch(prompt, /TASK: create_selector/);
 });
 
