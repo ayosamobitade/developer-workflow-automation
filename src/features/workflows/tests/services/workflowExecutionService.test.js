@@ -665,7 +665,7 @@ test(
             projectTree: "core/finance/payments/models/payment.py",
         });
         const dependencyPath = "core/finance/payments/models/customer.py";
-        const dependencyContent = "class Customer:\\n    pass\\n";
+        const dependencyContent = "class Customer:\n    pass\n";
         const originalPrompts = [];
         const sentPrompts = [];
         let call = 0;
@@ -678,7 +678,7 @@ test(
                 requiredFor: "Payment.customer",
             }),
             "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>",
-        ].join("\\n");
+        ].join("\n");
 
         const outputResponse = [
             "<<<PROMPTFLOW_OUTPUT_START:model>>>",
@@ -686,7 +686,7 @@ test(
             MODEL_CONTENT.trimEnd(),
             "```",
             "<<<PROMPTFLOW_OUTPUT_END:model>>>",
-        ].join("\\n");
+        ].join("\n");
 
         const environment = createExecutionEnvironment({
             workflow,
