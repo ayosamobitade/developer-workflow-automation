@@ -329,6 +329,7 @@ test(
             },
             sendPrompt: async (prompt) => {
                 assert.match(prompt, /model_test/);
+                assert.match(prompt, /class PaymentFactory/);
                 assert.doesNotMatch(prompt, /<<<PROMPTFLOW_OUTPUT_START:model_factory>>>/);
                 return [
                     "<<<PROMPTFLOW_OUTPUT_START:model_test>>>",
