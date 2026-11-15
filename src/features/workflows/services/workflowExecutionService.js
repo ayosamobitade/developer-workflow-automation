@@ -598,19 +598,29 @@ export function createWorkflowExecutionController({
                 return workflow;
             }
 
-            // An empty placeholder may receive generated content,
-            // but a previously written output must never be overwritten.
+            // Existing non-empty files are protected by default. Automatic
+            // continuation may update them because the native host creates a
+            // timestamped backup before replacing an existing destination.
             if (
                 existingFile.content.trim() !== "" ||
                 taskOutput.status === WORKFLOW_OUTPUT_STATUS.WRITTEN
             ) {
-                throw new Error(
-                    `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
-                );
+                if (!workflow.input?.automaticContinuation) {
+                    throw new Error(
+                        `Recovery conflict: "${destination}" already contains different content. The file was not overwritten.`
+                    );
+                }
+
+                emit("existing_file_update_authorized", {
+                    taskId,
+                    outputId: output.outputId,
+                    path: destination,
+                    backupRequired: true,
+                });
             }
 
-            // Empty or whitespace-only file:
-            // continue below to the normal write operation.
+            // Continue to the native write operation. The native host is
+            // responsible for creating and returning the backup path.
         }
 
 
@@ -634,6 +644,29 @@ export function createWorkflowExecutionController({
                 writeResponse.error ||
                 `Native host failed to write "${destination}".`
             );
+        }
+
+        if (
+            currentFiles.has(destination) &&
+            workflow.input?.automaticContinuation
+        ) {
+            const backupPath =
+                writeResponse?.backup ||
+                writeResponse?.result?.backup ||
+                writeResponse?.data?.backup;
+
+            if (!backupPath) {
+                throw new Error(
+                    `The native host did not confirm a backup for existing file "${destination}". The update was not accepted as safe.`
+                );
+            }
+
+            emit("existing_file_backed_up", {
+                taskId,
+                outputId: output.outputId,
+                path: destination,
+                backupPath,
+            });
         }
 
         assertNotStopped(shouldStop);
