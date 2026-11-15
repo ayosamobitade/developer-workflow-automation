@@ -1160,10 +1160,20 @@ export function createWorkflowExecutionController({
         });
 
         let dependency = await readFile(dependencyPath);
-        let dependencyContent =
-            dependency && typeof dependency.content === "string"
-                ? dependency.content
-                : "";
+
+        // Only a confirmed "not found" result may enter the create path.
+        // A read/permission error must never be mistaken for an empty file.
+        if (
+            dependency &&
+            typeof dependency.content !== "string"
+        ) {
+            throw new Error(
+                dependency.error ||
+                `Could not safely inspect dependency file "${dependencyPath}".`
+            );
+        }
+
+        let dependencyContent = dependency?.content || "";
 
         if (!dependencyContent.trim()) {
             emit("dependency_generation_started", {
