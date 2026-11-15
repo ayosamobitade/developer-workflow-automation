@@ -137,6 +137,137 @@ function getResponseText(response) {
 }
 
 
+function inferDependencyTask(dependencyPath, definition, workflow) {
+    const patterns = [
+        {
+            taskId: "create_model",
+            outputId: "model",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)models\\/(.+\\/)?([^/]+)\\.py$/),
+        },
+        {
+            taskId: "create_factory_and_model_test",
+            outputId: "model_factory",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/factories\\/([^/]+)_factory\\.py$/),
+        },
+        {
+            taskId: "create_factory_and_model_test",
+            outputId: "model_test",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/models\\/test_([^/]+)\\.py$/),
+        },
+        {
+            taskId: "create_selector",
+            outputId: "selector",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)selectors\\/(.+\\/)?([^/]+)_selector\\.py$/),
+        },
+        {
+            taskId: "create_selector_test",
+            outputId: "selector_test",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/selectors\\/(.+\\/)?test_([^/]+)_selector\\.py$/),
+        },
+        {
+            taskId: "create_service",
+            outputId: "service",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)services\\/(.+\\/)?([^/]+)_service\\.py$/),
+        },
+        {
+            taskId: "create_service_test",
+            outputId: "service_test",
+            match: dependencyPath.match(/^(.*?)(?:^|\\/)tests\\/services\\/(.+\\/)?test_([^/]+)_service\\.py$/),
+        },
+    ];
+
+    const match = patterns.find((item) => item.match);
+    if (!match) return null;
+
+    const task = definition.tasks.find((item) => item.id === match.taskId);
+    const output = task?.outputs.find((item) => item.id === match.outputId);
+    if (!task || !output) return null;
+
+    const groups = match.match;
+    let appRoot = "";
+    let modelGroup = "";
+    let modelName = "";
+
+    if (match.taskId === "create_model") {
+        appRoot = groups[1].replace(/\\/$/, "");
+        modelGroup = groups[2] || "";
+        modelName = groups[3];
+    } else if (
+        match.taskId === "create_selector" ||
+        match.taskId === "create_selector_test" ||
+        match.taskId === "create_service" ||
+        match.taskId === "create_service_test"
+    ) {
+        appRoot = groups[1].replace(/\\/$/, "");
+        modelGroup = groups[2] || "";
+        modelName = groups[3];
+    } else {
+        appRoot = groups[1].replace(/\\/$/, "");
+        modelName = groups[2];
+        const selectedPath = workflow.input?.modelPath || "";
+        const selectedName = selectedPath.split("/").at(-1)?.replace(/\\.py$/i, "");
+        if (selectedName === modelName) {
+            const segments = selectedPath.split("/");
+            const modelsIndex = segments.lastIndexOf("models");
+            if (modelsIndex >= 0) {
+                appRoot = segments.slice(0, modelsIndex).join("/");
+                modelGroup = segments.slice(modelsIndex + 1, -1).join("/");
+            }
+        }
+    }
+
+    const modelPath = [
+        appRoot,
+        "models",
+        modelGroup,
+        `${modelName}.py`,
+    ].filter(Boolean).join("/");
+
+    const selectorPath = [
+        appRoot,
+        "selectors",
+        modelGroup,
+        `${modelName}_selector.py`,
+    ].filter(Boolean).join("/");
+
+    const servicePath = [
+        appRoot,
+        "services",
+        modelGroup,
+        `${modelName}_service.py`,
+    ].filter(Boolean).join("/");
+
+    const sourcePaths = {
+        model: modelPath,
+        selector: selectorPath,
+        service: servicePath,
+    };
+
+    const dependencyTask = {
+        ...task,
+        sources: task.sources.map((source) => {
+            if (source.type === "project_tree") return source;
+            const path = sourcePaths[source.id];
+            if (!path) {
+                throw new Error(
+                    `Cannot infer the source path for dependency "${source.id}" required by "${dependencyPath}".`
+                );
+            }
+            return {
+                ...source,
+                type: "project_file",
+                path,
+            };
+        }),
+    };
+
+    return {
+        task: dependencyTask,
+        output,
+    };
+}
+
+
 function findDependencyOutput({
     workflow,
     definition,
@@ -165,15 +296,25 @@ function findDependencyOutput({
         }
     }
 
-    if (matches.length !== 1) {
+    if (matches.length > 1) {
         throw new Error(
-            matches.length
-                ? `Dependency path "${dependencyPath}" matches more than one workflow output.`
-                : `PromptFlow does not have a normal file-generation instruction for dependency "${dependencyPath}". The file cannot be generated safely by guessing its type.`
+            `Dependency path "${dependencyPath}" matches more than one workflow output.`
         );
     }
 
-    return matches[0];
+    if (matches.length === 1) return matches[0];
+
+    const inferred = inferDependencyTask(
+        dependencyPath,
+        definition,
+        workflow
+    );
+
+    if (inferred) return inferred;
+
+    throw new Error(
+        `PromptFlow does not have a normal file-generation instruction for dependency "${dependencyPath}". The file type could not be identified safely.`
+    );
 }
 
 async function loadTaskSources({
