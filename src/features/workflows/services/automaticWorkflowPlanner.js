@@ -98,7 +98,7 @@ const TASK_COMPLETENESS_RULES = Object.freeze({
     create_service_test: "Confirm meaningful tests cover the service's public operations, successful paths, validation failures, edge cases and transactional/business behavior.",
 });
 
-export function buildImplementationAssessmentPrompt(plan, definition, taskIds = null) {
+export function buildImplementationAssessmentPrompt(plan, definition, taskIds = null, workflow = null) {
     if (!plan || !Array.isArray(plan.deliverables) || !definition?.tasks) {
         throw new TypeError("A valid implementation plan and workflow definition are required.");
     }
@@ -122,18 +122,44 @@ export function buildImplementationAssessmentPrompt(plan, definition, taskIds = 
         "A non-empty file, a class declaration, or superficial method names are NOT sufficient evidence of completion. Consider imports, implementation bodies, error handling, data relationships, query behavior and meaningful tests as appropriate.",
         "If correctness is uncertain, choose NEEDS_WORK. For multi-output tasks, every output must be complete for the task to be COMPLETE.",
         "",
-        "Return ONLY valid JSON in this exact shape:",
-        '{"tasks":{"create_model":"COMPLETE","create_factory_and_model_test":"NEEDS_WORK","create_selector":"COMPLETE","create_selector_test":"NEEDS_WORK","create_service":"NEEDS_WORK","create_service_test":"NEEDS_WORK"}}',
-        "Include every task ID shown below. Use only COMPLETE or NEEDS_WORK as values.",
+        "Return ONLY valid JSON with a tasks object containing exactly the task IDs being assessed.",
+        JSON.stringify({
+            tasks: Object.fromEntries(candidates.map((task) => [task.id, "COMPLETE"])),
+        }),
+        "Use only COMPLETE or NEEDS_WORK as values.",
     ];
 
+    const dependencySources = {
+        create_factory_and_model_test: [["create_model", "model"]],
+        create_selector: [["create_model", "model"]],
+        create_selector_test: [["create_model", "model"], ["create_selector", "selector"]],
+        create_service: [["create_model", "model"], ["create_selector", "selector"]],
+        create_service_test: [["create_model", "model"], ["create_service", "service"]],
+    };
+
     for (const task of candidates) {
+        const dependencyContext = (dependencySources[task.id] || [])
+            .flatMap(([sourceTaskId, sourceOutputId]) => {
+                const sourceTask = workflow?.tasks?.find((item) => item.id === sourceTaskId);
+                const sourceOutput = sourceTask?.outputs?.find((item) => item.id === sourceOutputId);
+                if (!sourceOutput?.content?.trim()) return [];
+                return [
+                    "",
+                    `DEPENDENCY SOURCE: ${sourceTaskId}.${sourceOutputId}`,
+                    `PATH: ${sourceOutput.destination?.path || "Workflow output"}`,
+                    "\x60\x60\x60python",
+                    compactPythonWhitespace(sourceOutput.content),
+                    "\x60\x60\x60",
+                ];
+            });
+
         sections.push(
             [
                 "",
                 `TASK: ${task.id}`,
                 `Requirements: ${task.instruction}`,
                 `Completeness criteria: ${TASK_COMPLETENESS_RULES[task.id] || "Confirm every required output is complete and production-ready."}`,
+                ...dependencyContext,
                 ...task.outputs.flatMap((output) => {
                     const key = `${task.id}.${output.id}`;
                     const file = plan.existingFiles[key];
