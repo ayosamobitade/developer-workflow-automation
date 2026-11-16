@@ -968,6 +968,103 @@ function delay(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function createResponseCapture({ responseTimeout = RESPONSE_TIMEOUT_MS } = {}) {
+    const captureId = crypto.randomUUID();
+    let settled = false;
+    let resolveResponse;
+    let rejectResponse;
+    let resolveReady;
+    let rejectReady;
+
+    const promise = new Promise((resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+    });
+    const ready = new Promise((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+    });
+
+    let responseTimer = null;
+    let readyTimer = null;
+
+    function cleanup() {
+        window.removeEventListener("message", handleBridgeMessage);
+        if (responseTimer) clearTimeout(responseTimer);
+        if (readyTimer) clearTimeout(readyTimer);
+    }
+
+    function finish(error, response) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) rejectResponse(error);
+        else resolveResponse(response);
+    }
+
+    function handleBridgeMessage(event) {
+        if (event.source !== window || event.origin !== location.origin) return;
+        const message = event.data;
+
+        if (
+            message?.source !== "PROMPTFLOW_MAIN_WORLD" ||
+            message.captureId !== captureId
+        ) return;
+
+        if (message.type === "ARMED") {
+            if (readyTimer) clearTimeout(readyTimer);
+            resolveReady(true);
+            return;
+        }
+
+        if (message.type === "COMPLETE") {
+            if (!message.response || typeof message.response.text !== "string") {
+                finish(new Error("ChatGPT's response stream returned an invalid capture."));
+                return;
+            }
+            finish(null, message.response);
+            return;
+        }
+
+        if (message.type === "ERROR") {
+            finish(new Error(message.error || "ChatGPT response stream capture failed."));
+        }
+    }
+
+    window.addEventListener("message", handleBridgeMessage);
+    readyTimer = setTimeout(() => {
+        const error = new Error(
+            "PromptFlow could not arm ChatGPT's response-stream observer. Reload the ChatGPT tab and try again."
+        );
+        rejectReady(error);
+        finish(error);
+    }, 5000);
+
+    window.postMessage({
+        source: "PROMPTFLOW_CONTENT",
+        type: "ARM",
+        captureId,
+    }, location.origin);
+
+    responseTimer = setTimeout(() => {
+        finish(new Error("Timed out while capturing ChatGPT's response stream."));
+    }, responseTimeout);
+
+    return {
+        captureId,
+        ready,
+        promise,
+        cancel(reason = "Response capture cancelled.") {
+            window.postMessage({
+                source: "PROMPTFLOW_CONTENT",
+                type: "CANCEL",
+                captureId,
+            }, location.origin);
+            finish(new Error(reason));
+        },
+    };
+}
+
 async function waitForAssistantResponseRecovery({
     previousSnapshot,
     expectedOutputIds,
@@ -1031,7 +1128,7 @@ async function waitForAssistantResponseRecovery({
     return null;
 }
 
-async function insertAndSendPrompt(prompt) {
+async function insertAndSendPrompt(prompt, shouldCapture = false) {
     const editor = findChatGPTComposer();
     if (!editor) {
         throw new Error("Could not find ChatGPT's message composer. Open a ChatGPT conversation and wait for it to finish loading.");
@@ -1059,11 +1156,25 @@ async function insertAndSendPrompt(prompt) {
         throw new Error("The prompt is in ChatGPT's composer, but its Send button could not be found.");
     }
 
+    let responseCapture = null;
+    if (shouldCapture) {
+        responseCapture = createResponseCapture({
+            responseTimeout: RESPONSE_TIMEOUT_MS,
+        });
+        try {
+            await responseCapture.ready;
+        } catch (error) {
+            responseCapture.cancel(error.message);
+            throw error;
+        }
+    }
+
     sendButton.click();
-    return true;
+    return { responseCapture, sent: true };
 }
 
 async function handlePromptMessage(message) {
+    const shouldInsertOnly = message.type === "PROMPTFLOW_INSERT_PROMPT";
     const shouldSend = [
         "PROMPTFLOW_INSERT_AND_SEND",
         "PROMPTFLOW_INSERT_AND_WAIT",
@@ -1080,14 +1191,16 @@ async function handlePromptMessage(message) {
             throw new Error("ChatGPT is already generating a response. Wait for it to finish before starting another workflow task.");
         }
 
+        if (shouldInsertOnly) {
+            const editor = findChatGPTComposer();
+            if (!editor) throw new Error("Could not find ChatGPT's message composer.");
+            insertIntoComposer(editor, prompt);
+            return { success: true, message: "Prompt inserted into ChatGPT." };
+        }
+
         if (!shouldWait) {
-            await insertAndSendPrompt(prompt);
-            return {
-                success: true,
-                message: shouldSend
-                    ? "Prompt inserted and sent to ChatGPT."
-                    : "Prompt inserted into ChatGPT.",
-            };
+            await insertAndSendPrompt(prompt, false);
+            return { success: true, message: "Prompt inserted and sent to ChatGPT." };
         }
 
         const expectedOutputIds = getExpectedOutputIds(prompt);
@@ -1095,7 +1208,7 @@ async function handlePromptMessage(message) {
 
         for (let attempt = 1; attempt <= MAX_RESPONSE_ATTEMPTS; attempt += 1) {
             if (isChatGPTGenerating()) {
-                throw new Error("ChatGPT is still generating a response. PromptFlow will not submit a duplicate prompt.");
+                throw new Error("ChatGPT is already generating a response. PromptFlow will not submit a duplicate prompt.");
             }
 
             let previousSnapshot;
@@ -1105,7 +1218,45 @@ async function handlePromptMessage(message) {
                 previousSnapshot = { element: null, count: 0, text: "" };
             }
 
-            await insertAndSendPrompt(prompt);
+            let responseCapture = null;
+            let promptWasSent = false;
+
+            try {
+                const sent = await insertAndSendPrompt(prompt, true);
+                responseCapture = sent.responseCapture;
+                promptWasSent = sent.sent;
+
+                const streamedResponse = await responseCapture.promise;
+                if (hasCompleteWorkflowOutput(streamedResponse.text, expectedOutputIds)) {
+                    console.info("[PromptFlow] Captured complete source directly from ChatGPT's response stream.", {
+                        attempt,
+                        length: streamedResponse.text.length,
+                        duration: streamedResponse.duration,
+                    });
+                    return {
+                        success: true,
+                        message: "ChatGPT completed its response.",
+                        response: streamedResponse,
+                    };
+                }
+
+                lastError = new Error("ChatGPT's completed response stream was missing one or more required output blocks.");
+            } catch (error) {
+                lastError = error;
+            } finally {
+                if (responseCapture) {
+                    responseCapture.cancel("PromptFlow finished response capture.");
+                }
+            }
+
+            if (!promptWasSent) {
+                throw lastError || new Error("PromptFlow could not send the prompt.");
+            }
+
+            console.warn("[PromptFlow] Stream capture was incomplete. Checking the rendered response before retrying.", {
+                attempt,
+                error: lastError?.message || "Unknown response capture error.",
+            });
 
             const recoveredResponse = await waitForAssistantResponseRecovery({
                 previousSnapshot,
@@ -1114,28 +1265,27 @@ async function handlePromptMessage(message) {
             });
 
             if (recoveredResponse?.complete) {
-                console.info("[PromptFlow] Captured completed response from the ChatGPT conversation DOM.", {
+                console.info("[PromptFlow] Recovered a complete response from ChatGPT's rendered conversation.", {
                     attempt,
                     length: recoveredResponse.text.length,
                 });
                 return {
                     success: true,
-                    message: "ChatGPT completed its response.",
+                    message: "ChatGPT response recovered from the conversation.",
                     response: recoveredResponse,
                 };
             }
 
-            lastError = new Error(
-                recoveredResponse
-                    ? "ChatGPT finished responding, but its answer is missing one or more required output markers."
-                    : "No completed assistant response appeared before the response timeout."
-            );
+            if (isChatGPTGenerating()) {
+                throw new Error("ChatGPT is still generating. PromptFlow stopped rather than resubmitting the instruction.");
+            }
+
+            if (recoveredResponse) {
+                lastError = new Error("ChatGPT finished responding, but the rendered answer is missing required output markers.");
+            }
 
             if (attempt < MAX_RESPONSE_ATTEMPTS) {
-                if (isChatGPTGenerating()) {
-                    throw new Error("ChatGPT is still generating. PromptFlow stopped rather than submitting a duplicate prompt.");
-                }
-                console.warn("[PromptFlow] Response was incomplete; retrying the original prompt.", {
+                console.warn("[PromptFlow] The completed response was incomplete. Retrying the original prompt.", {
                     nextAttempt: attempt + 1,
                     maxAttempts: MAX_RESPONSE_ATTEMPTS,
                 });
