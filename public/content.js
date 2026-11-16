@@ -6,7 +6,7 @@
 
 // const RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
 
-function isVisible(element) {
+// function isVisible(element) {
 //     if (!element) return false;
 
 //     const style = window.getComputedStyle(element);
@@ -1041,7 +1041,7 @@ async function insertAndSendPrompt(prompt) {
     const composerText = editor instanceof HTMLTextAreaElement
         ? editor.value
         : editor.innerText || editor.textContent || "";
-    const normalize = (value) => value.replace(/\\s+/g, " ").trim();
+    const normalize = (value) => value.replace(/\s+/g, " ").trim();
     const expected = normalize(prompt);
     const actual = normalize(composerText);
 
