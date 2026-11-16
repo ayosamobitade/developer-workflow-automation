@@ -125,37 +125,52 @@ async function sendChatGPTMessage(chatTabId, message) {
             throw error;
         }
 
-        // Firefox does not automatically inject newly updated content scripts
-        // into tabs that were already open when the extension was reloaded.
-        // Recover by injecting the isolated-world content script on demand.
+        // A tab that was already open when PromptFlow was reloaded may not
+        // have the current content-script listener. Reloading the ChatGPT tab
+        // lets Firefox inject the manifest-declared script normally. Avoid
+        // executeScript here: injecting the raw public asset can fail when
+        // Firefox encounters syntax that differs from its page-script parser.
         try {
-            await browser.tabs.executeScript(chatTabId, {
-                file: "content.js",
-                runAt: "document_idle",
-            });
-        } catch (injectionError) {
-            const detail =
-                injectionError?.message || String(injectionError);
-
+            await browser.tabs.reload(chatTabId);
+        } catch (reloadError) {
+            const detail = reloadError?.message || String(reloadError);
             throw new Error(
-                "PromptFlow could not load its ChatGPT content script. " +
-                "Refresh the ChatGPT tab and start the batch again. " +
+                "PromptFlow could not refresh the ChatGPT tab to restore its content script. " +
                 detail
             );
         }
 
-        try {
-            return await browser.tabs.sendMessage(chatTabId, message);
-        } catch (retryError) {
-            const detail =
-                retryError?.message || String(retryError);
+        const readinessDeadline = Date.now() + 30000;
+        let ready = false;
+        let lastReadinessError = null;
 
+        while (Date.now() < readinessDeadline) {
+            try {
+                const readiness = await browser.tabs.sendMessage(chatTabId, {
+                    type: "PROMPTFLOW_CONTENT_SCRIPT_PING",
+                });
+                if (readiness?.success) {
+                    ready = true;
+                    break;
+                }
+            } catch (readinessError) {
+                lastReadinessError = readinessError;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+
+        if (!ready) {
+            const detail = lastReadinessError?.message
+                ? " " + lastReadinessError.message
+                : "";
             throw new Error(
-                "PromptFlow loaded its ChatGPT content script but could not " +
-                "reach it. Refresh the ChatGPT tab and try again. " +
+                "PromptFlow refreshed ChatGPT but its content script did not become ready within 30 seconds. " +
+                "Check that the PromptFlow extension is enabled and reload it." +
                 detail
             );
         }
+
+        return browser.tabs.sendMessage(chatTabId, message);
     }
 }
 
