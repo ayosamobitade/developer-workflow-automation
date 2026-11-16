@@ -880,6 +880,8 @@ function isChatGPTGenerating() {
  * If the network stream reports an error, inspect the rendered answer
  * before resending the original prompt.
  */
+// Maximum time allowed for ChatGPT to finish one response.
+const RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
 const RESPONSE_RECOVERY_STABILITY_MS = 4000;
 const RESPONSE_RECOVERY_START_TIMEOUT_MS = 60000;
 const MAX_RESPONSE_ATTEMPTS = 3;
