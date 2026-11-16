@@ -756,7 +756,7 @@ const MAX_RESPONSE_ATTEMPTS = 3;
 
 function getExpectedOutputIds(prompt) {
     if (typeof prompt !== "string") return [];
-    const matches = prompt.matchAll(/<<<PROMPTFLOW_OUTPUT_START:([^>\\r\\n]+)>>>/g);
+    const matches = prompt.matchAll(/<<<PROMPTFLOW_OUTPUT_START:([^>\r\n]+)>>>/g);
     return [...new Set(Array.from(matches, (match) => match[1].trim()).filter(Boolean))];
 }
 
@@ -911,7 +911,7 @@ async function insertAndSendPrompt(prompt, shouldWait) {
     const composerText = editor instanceof HTMLTextAreaElement
         ? editor.value
         : editor.innerText || editor.textContent || "";
-    const normalizeText = (value) => value.replace(/\\s+/g, " ").trim();
+    const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
     const expectedText = normalizeText(prompt);
     const actualText = normalizeText(composerText);
 
