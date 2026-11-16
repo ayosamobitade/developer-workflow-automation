@@ -1145,6 +1145,10 @@ async function handlePromptMessage(message) {
 
 
 browser.runtime.onMessage.addListener((message) => {
+    if (message?.type === "PROMPTFLOW_CONTENT_SCRIPT_PING") {
+        return Promise.resolve({ success: true });
+    }
+
     const supportedTypes = [
         "PROMPTFLOW_INSERT_PROMPT",
         "PROMPTFLOW_INSERT_AND_SEND",
