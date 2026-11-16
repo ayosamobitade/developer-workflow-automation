@@ -4,7 +4,9 @@
 // const RESPONSE_CHECK_INTERVAL_MS = 250;
 
 
-// function isVisible(element) {
+// const RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
+
+function isVisible(element) {
 //     if (!element) return false;
 
 //     const style = window.getComputedStyle(element);
