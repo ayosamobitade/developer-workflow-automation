@@ -112,6 +112,53 @@ async function listProjectFiles({
     return response.files || [];
 }
 
+async function sendChatGPTMessage(chatTabId, message) {
+    try {
+        return await browser.tabs.sendMessage(chatTabId, message);
+    } catch (error) {
+        const errorMessage = error?.message || String(error);
+        const missingReceiver =
+            /receiving end does not exist|could not establish connection|no matching message handler/i
+                .test(errorMessage);
+
+        if (!missingReceiver) {
+            throw error;
+        }
+
+        // Firefox does not automatically inject newly updated content scripts
+        // into tabs that were already open when the extension was reloaded.
+        // Recover by injecting the isolated-world content script on demand.
+        try {
+            await browser.tabs.executeScript(chatTabId, {
+                file: "content.js",
+                runAt: "document_idle",
+            });
+        } catch (injectionError) {
+            const detail =
+                injectionError?.message || String(injectionError);
+
+            throw new Error(
+                "PromptFlow could not load its ChatGPT content script. " +
+                "Refresh the ChatGPT tab and start the batch again. " +
+                detail
+            );
+        }
+
+        try {
+            return await browser.tabs.sendMessage(chatTabId, message);
+        } catch (retryError) {
+            const detail =
+                retryError?.message || String(retryError);
+
+            throw new Error(
+                "PromptFlow loaded its ChatGPT content script but could not " +
+                "reach it. Refresh the ChatGPT tab and try again. " +
+                detail
+            );
+        }
+    }
+}
+
 async function sendPromptToChatGPT(chatTabId, prompt) {
     if (!Number.isInteger(chatTabId)) {
         throw new Error("A valid ChatGPT tab ID is required.");
@@ -129,14 +176,11 @@ async function sendPromptToChatGPT(chatTabId, prompt) {
         );
     }
 
-    const response = await browser.tabs.sendMessage(
-        chatTabId,
-        {
-            type: "PROMPTFLOW_INSERT_AND_WAIT",
-            prompt,
-            timeout: 600000,
-        }
-    );
+    const response = await sendChatGPTMessage(chatTabId, {
+        type: "PROMPTFLOW_INSERT_AND_WAIT",
+        prompt,
+        timeout: 600000,
+    });
 
     if (!response?.success) {
         throw new Error(
