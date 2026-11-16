@@ -744,7 +744,191 @@
 //  */
 
 
-// async function handlePromptMessage(message) {
+// /*
+ * RESPONSE RECOVERY
+ *
+ * If the network stream reports an error, inspect the rendered answer
+ * before resending the original prompt.
+ */
+const RESPONSE_RECOVERY_STABILITY_MS = 4000;
+const RESPONSE_RECOVERY_START_TIMEOUT_MS = 60000;
+const MAX_RESPONSE_ATTEMPTS = 3;
+
+function getExpectedOutputIds(prompt) {
+    if (typeof prompt !== "string") return [];
+    const matches = prompt.matchAll(/<<<PROMPTFLOW_OUTPUT_START:([^>\\r\\n]+)>>>/g);
+    return [...new Set(Array.from(matches, (match) => match[1].trim()).filter(Boolean))];
+}
+
+function getAssistantMessages() {
+    const messages = Array.from(
+        document.querySelectorAll('[data-message-author-role="assistant"]')
+    ).filter(isVisible);
+    if (messages.length) return messages;
+
+    return Array.from(document.querySelectorAll("main h4"))
+        .filter((heading) => heading.innerText?.trim() === "ChatGPT said:")
+        .map((heading) => heading.parentElement)
+        .filter(Boolean)
+        .filter(isVisible);
+}
+
+function getAssistantMessageText(element) {
+    if (!element) return "";
+    const clone = element.cloneNode(true);
+    const originalSurfaces = Array.from(element.querySelectorAll('[class*="CodeSurface"]'));
+    const clonedSurfaces = Array.from(clone.querySelectorAll('[class*="CodeSurface"]'));
+
+    for (let index = 0; index < clonedSurfaces.length; index += 1) {
+        const originalContent = originalSurfaces[index]?.querySelector(".cm-content");
+        const clonedSurface = clonedSurfaces[index];
+        if (!originalContent || !clonedSurface) continue;
+
+        const editorView = originalContent.cmView?.view;
+        if (editorView?.state?.doc) {
+            const pre = document.createElement("pre");
+            pre.textContent = editorView.state.doc.toString();
+            clonedSurface.replaceWith(pre);
+        }
+    }
+
+    return (clone.innerText || clone.textContent || "").trim();
+}
+
+function getAssistantSnapshot() {
+    const messages = getAssistantMessages();
+    const element = messages.at(-1) || null;
+    return {
+        element,
+        count: messages.length,
+        text: getAssistantMessageText(element),
+    };
+}
+
+function hasCompleteWorkflowOutput(responseText, expectedOutputIds) {
+    if (typeof responseText !== "string" || !responseText.trim()) return false;
+    if (!expectedOutputIds.length) return true;
+
+    return expectedOutputIds.every((outputId) => {
+        const startMarker = "<<<PROMPTFLOW_OUTPUT_START:" + outputId + ">>>";
+        const endMarker = "<<<PROMPTFLOW_OUTPUT_END:" + outputId + ">>>";
+        if (
+            responseText.split(startMarker).length - 1 !== 1 ||
+            responseText.split(endMarker).length - 1 !== 1
+        ) return false;
+
+        const startPosition = responseText.indexOf(startMarker);
+        const endPosition = responseText.indexOf(endMarker);
+        return endPosition > startPosition + startMarker.length;
+    });
+}
+
+function delay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForAssistantResponseRecovery({
+    previousSnapshot,
+    expectedOutputIds,
+    timeout = RESPONSE_TIMEOUT_MS,
+}) {
+    const startedAt = Date.now();
+    let responseStarted = false;
+    let lastResponseText = "";
+    let lastChangeAt = 0;
+
+    while (Date.now() - startedAt < timeout) {
+        const now = Date.now();
+        const generating = isChatGPTGenerating();
+        let snapshot = null;
+
+        try {
+            snapshot = getAssistantSnapshot();
+        } catch (error) {
+            console.warn("[PromptFlow] Waiting for rendered response to become readable.", error);
+        }
+
+        if (snapshot?.text) {
+            const isNewResponse =
+                snapshot.element !== previousSnapshot?.element ||
+                snapshot.count > (previousSnapshot?.count || 0) ||
+                (
+                    snapshot.element === previousSnapshot?.element &&
+                    snapshot.text !== previousSnapshot?.text
+                );
+
+            if (isNewResponse) {
+                if (!responseStarted || snapshot.text !== lastResponseText) {
+                    responseStarted = true;
+                    lastResponseText = snapshot.text;
+                    lastChangeAt = now;
+                }
+
+                if (generating) {
+                    lastChangeAt = now;
+                } else if (now - lastChangeAt >= RESPONSE_RECOVERY_STABILITY_MS) {
+                    return {
+                        text: snapshot.text,
+                        completedAt: now,
+                        duration: now - startedAt,
+                        source: "chatgpt_dom_recovery",
+                        complete: hasCompleteWorkflowOutput(snapshot.text, expectedOutputIds),
+                    };
+                }
+            }
+        }
+
+        if (
+            !responseStarted &&
+            !generating &&
+            now - startedAt >= RESPONSE_RECOVERY_START_TIMEOUT_MS
+        ) return null;
+
+        await delay(250);
+    }
+
+    return null;
+}
+
+async function insertAndSendPrompt(prompt, shouldWait) {
+    const editor = findChatGPTComposer();
+    if (!editor) {
+        throw new Error("Could not find ChatGPT's message composer. Make sure ChatGPT is open and the page has finished loading.");
+    }
+
+    insertIntoComposer(editor, prompt);
+    await delay(300);
+
+    const composerText = editor instanceof HTMLTextAreaElement
+        ? editor.value
+        : editor.innerText || editor.textContent || "";
+    const normalizeText = (value) => value.replace(/\\s+/g, " ").trim();
+    const expectedText = normalizeText(prompt);
+    const actualText = normalizeText(composerText);
+
+    if (!actualText.includes(expectedText.slice(0, Math.min(80, expectedText.length)))) {
+        throw new Error("Prompt insertion could not be verified in ChatGPT's active composer.");
+    }
+    if (!editor.isConnected) {
+        throw new Error("The ChatGPT composer changed before the prompt could be sent.");
+    }
+
+    const sendButton = await waitForSendButton(editor);
+    if (!sendButton) {
+        throw new Error("The prompt was inserted, but ChatGPT's Send button could not be found.");
+    }
+
+    let responseCapture = null;
+    if (shouldWait) {
+        responseCapture = await createResponseCapture({
+            responseTimeout: RESPONSE_TIMEOUT_MS,
+        });
+    }
+    sendButton.click();
+    return { responseCapture, sent: true };
+}
+
+async function handlePromptMessage(message) {
     const shouldSend =
         message.type === "PROMPTFLOW_INSERT_AND_SEND" ||
         message.type === "PROMPTFLOW_INSERT_AND_WAIT";
