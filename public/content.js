@@ -819,7 +819,16 @@ function hasCompleteWorkflowOutput(responseText, expectedOutputIds) {
 
         const startPosition = responseText.indexOf(startMarker);
         const endPosition = responseText.indexOf(endMarker);
-        return endPosition > startPosition + startMarker.length;
+
+        if (endPosition <= startPosition + startMarker.length) {
+            return false;
+        }
+
+        return Boolean(
+            responseText
+                .slice(startPosition + startMarker.length, endPosition)
+                .trim()
+        );
     });
 }
 
