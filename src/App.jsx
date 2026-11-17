@@ -442,9 +442,13 @@ function App() {
         } catch (restoreError) {
             if (!isCurrentRestore()) return;
 
-            // A transient native-host or filesystem error must not revoke
-            // otherwise-valid capabilities. Expired/revoked tokens are
-            // renewed by ensureReadSession/ensureWriteSession on next use.
+            // Only clear stored capabilities when the native host explicitly
+            // rejects authorization. Filesystem/native-host connectivity
+            // failures must not revoke otherwise-valid sessions.
+            if (/authorization session is invalid|has been revoked|has expired|belongs to another|permission is not granted/i.test(restoreError.message || "")) {
+                await revokeTabSessions(tabId);
+            }
+
             if (!isCurrentRestore()) return;
 
             setNativeProjectId("");
