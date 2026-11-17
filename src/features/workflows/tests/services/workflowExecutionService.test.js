@@ -922,7 +922,7 @@ test(
         );
         assert.equal(
             result.workflow.input.dependencyResolution.status,
-            "source_ready"
+            "completed"
         );
         assert.equal(
             result.workflow.input.dependencyResolution.dependencies[0].path,
