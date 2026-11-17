@@ -964,6 +964,55 @@ function hasCompleteWorkflowOutput(responseText, expectedOutputIds) {
     });
 }
 
+function hasCompleteDependencyRequest(responseText) {
+    if (typeof responseText !== "string" || !responseText.trim()) return false;
+
+    const startMarker = "<<<PROMPTFLOW_DEPENDENCY_REQUEST_START>>>";
+    const endMarker = "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>";
+
+    if (
+        responseText.split(startMarker).length - 1 !== 1 ||
+        responseText.split(endMarker).length - 1 !== 1
+    ) {
+        return false;
+    }
+
+    const start = responseText.indexOf(startMarker) + startMarker.length;
+    const end = responseText.indexOf(endMarker, start);
+    if (end <= start) return false;
+
+    let request;
+    try {
+        request = JSON.parse(responseText.slice(start, end).trim());
+    } catch {
+        return false;
+    }
+
+    if (typeof request?.path !== "string" || !request.path.trim()) {
+        return false;
+    }
+
+    const path = request.path.trim().replace(/\\\\/g, "/");
+    const segments = path.split("/");
+
+    return Boolean(
+        !path.startsWith("/") &&
+        !/^[A-Za-z]:/.test(path) &&
+        segments.every((segment) => segment && segment !== "." && segment !== "..") &&
+        segments.at(-1) !== "__init__.py"
+    );
+}
+
+function hasCompleteWorkflowResponse(responseText, expectedOutputIds) {
+    // A dependency request is a complete control-flow response, not a
+    // malformed implementation. Return it immediately so the dependency
+    // resolver can fetch/generate the file before the original prompt resumes.
+    return (
+        hasCompleteDependencyRequest(responseText) ||
+        hasCompleteWorkflowOutput(responseText, expectedOutputIds)
+    );
+}
+
 function delay(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -1110,7 +1159,7 @@ async function waitForAssistantResponseRecovery({
                         completedAt: now,
                         duration: now - startedAt,
                         source: "chatgpt_dom_recovery",
-                        complete: hasCompleteWorkflowOutput(snapshot.text, expectedOutputIds),
+                        complete: hasCompleteWorkflowResponse(snapshot.text, expectedOutputIds),
                     };
                 }
             }
@@ -1227,7 +1276,7 @@ async function handlePromptMessage(message) {
                 promptWasSent = sent.sent;
 
                 const streamedResponse = await responseCapture.promise;
-                if (hasCompleteWorkflowOutput(streamedResponse.text, expectedOutputIds)) {
+                if (hasCompleteWorkflowResponse(streamedResponse.text, expectedOutputIds)) {
                     console.info("[PromptFlow] Captured complete source directly from ChatGPT's response stream.", {
                         attempt,
                         length: streamedResponse.text.length,
