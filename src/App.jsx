@@ -91,6 +91,15 @@ async function sendPromptToChatGPT(prompt, shouldSend = true, waitForResponse = 
     return response;
 }
 
+function getAuthorizationStorage() {
+    // Session storage survives sidebar unmounts/reopens but is cleared when
+    // Firefox or the extension session ends. Keep bearer tokens out of
+    // long-lived extension local storage whenever Firefox supports it.
+    return globalThis.browser?.storage?.session ||
+        globalThis.browser?.storage?.local ||
+        null;
+}
+
 function isSessionValid(token, expiresAt) {
     return Boolean(token) &&
         Number.isFinite(expiresAt) &&
@@ -159,8 +168,9 @@ function App() {
 
         const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
         let stored = null;
-        if (browser?.storage?.local) {
-            const result = await browser.storage.local.get(key);
+        const storage = getAuthorizationStorage();
+        if (storage) {
+            const result = await storage.get(key);
             stored = result[key] || null;
         }
 
@@ -197,7 +207,7 @@ function App() {
                 stored.writeToken,
             ].filter(Boolean);
             await Promise.allSettled(oldTokens.map(revokeSession));
-            await browser?.storage?.local?.remove(key);
+            await getAuthorizationStorage()?.remove(key);
         }
 
         const record = createEmptySessionRecord(projectId);
@@ -223,13 +233,16 @@ function App() {
         let record = sessionsRef.current.get(tabId);
         const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
 
-        if (!record && browser?.storage?.local) {
-            const stored = await browser.storage.local.get(key);
-            record = stored[key] || null;
+        if (!record) {
+            const storage = getAuthorizationStorage();
+            if (storage) {
+                const stored = await storage.get(key);
+                record = stored[key] || null;
+            }
         }
 
         sessionsRef.current.delete(tabId);
-        await browser?.storage?.local?.remove(key);
+        await getAuthorizationStorage()?.remove(key);
 
         if (!record) return;
         const tokens = [...new Set([
@@ -429,8 +442,9 @@ function App() {
         } catch (restoreError) {
             if (!isCurrentRestore()) return;
 
-            await revokeTabSessions(tabId);
-
+            // A transient native-host or filesystem error must not revoke
+            // otherwise-valid capabilities. Expired/revoked tokens are
+            // renewed by ensureReadSession/ensureWriteSession on next use.
             if (!isCurrentRestore()) return;
 
             setNativeProjectId("");
