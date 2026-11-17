@@ -913,11 +913,11 @@ test(
             1
         );
         assert.equal(
-            workflow.input.dependencyResolution.status,
+            result.workflow.input.dependencyResolution.status,
             "source_ready"
         );
         assert.equal(
-            workflow.input.dependencyResolution.dependencies[0].path,
+            result.workflow.input.dependencyResolution.dependencies[0].path,
             dependencyPath
         );
     }
