@@ -45,6 +45,15 @@ const MODEL_CONTENT = [
     "",
 ].join("\n");
 
+const PROJECT_TREE = [
+    "educational/",
+    "└── core/",
+    "    └── finance/",
+    "        └── payments/",
+    "            └── models/",
+    "                └── payment.py",
+].join("\n");
+
 
 /*
  * Isolate model-output recovery.
@@ -428,7 +437,7 @@ test(
             projectId: "test-project",
             projectName: "Test Project",
             modelPath: MODEL_PATH,
-            projectTree: "core/finance/payments/models/payment.py",
+            projectTree: PROJECT_TREE,
         });
 
         const plan = {
@@ -830,7 +839,7 @@ test(
             projectId: "test-project",
             projectName: "Test Project",
             modelPath: MODEL_PATH,
-            projectTree: "core/finance/payments/models/payment.py",
+            projectTree: PROJECT_TREE,
         });
         const dependencyPath = "core/finance/payments/models/customer.py";
         const dependencyContent = "class Customer:\n    pass\n";
@@ -931,7 +940,7 @@ test(
             projectId: "test-project",
             projectName: "Test Project",
             modelPath: MODEL_PATH,
-            projectTree: "core/finance/payments/models/payment.py",
+            projectTree: PROJECT_TREE,
         });
         const dependencyPath = "core/finance/payments/models/customer.py";
         let promptCalls = 0;
@@ -985,7 +994,7 @@ test(
             projectId: "test-project",
             projectName: "Test Project",
             modelPath: MODEL_PATH,
-            projectTree: "core/finance/payments/models/payment.py",
+            projectTree: PROJECT_TREE,
         });
         const dependencyPath = "core/finance/payments/models/customer.py";
         const dependencyContent = "class Customer:\n    pass\n";
