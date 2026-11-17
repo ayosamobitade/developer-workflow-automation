@@ -897,7 +897,7 @@ test(
             workflow,
         });
 
-        assert.equal(result.success, true);
+        assert.equal(result.success, true, result.error || "Dependency workflow did not complete.");
         assert.equal(call, 4);
         assert.equal(sentPrompts[0], sentPrompts[3]);
         assert.match(sentPrompts[1], /DEPENDENCY SUBTASK SCOPE/);
