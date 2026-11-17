@@ -164,6 +164,7 @@ function createExecutionEnvironment({
     workflow,
     initialFiles = {},
     sendPrompt,
+    readFile,
     definition = MODEL_RECOVERY_WORKFLOW,
 } = {}) {
     const files = new Map(
@@ -183,6 +184,10 @@ function createExecutionEnvironment({
 
         readFile: async (path) => {
             calls.readFile.push(path);
+
+            if (readFile) {
+                return readFile(path, files);
+            }
 
             if (!files.has(path)) {
                 return null;
@@ -920,6 +925,60 @@ test(
             result.workflow.input.dependencyResolution.dependencies[0].path,
             dependencyPath
         );
+    }
+);
+
+
+test(
+    "does not treat a dependency read or permission error as a missing file",
+    async () => {
+        const workflow = createWorkflowInstance({
+            definition: MODEL_RECOVERY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree: "core/finance/payments/models/payment.py",
+        });
+        const dependencyPath = "core/finance/payments/models/customer.py";
+        let promptCalls = 0;
+
+        const dependencyRequest = [
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_START>>>",
+            JSON.stringify({
+                path: dependencyPath,
+                reason: "The model relationship requires this dependency.",
+                requiredFor: "Payment.customer",
+            }),
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>",
+        ].join("\n");
+
+        const environment = createExecutionEnvironment({
+            workflow,
+            sendPrompt: async () => {
+                promptCalls += 1;
+                return dependencyRequest;
+            },
+            readFile: async (path) => {
+                if (path === dependencyPath) {
+                    return {
+                        path,
+                        exists: true,
+                        error: "Permission denied while reading dependency.",
+                    };
+                }
+                return null;
+            },
+        });
+
+        const result = await environment.controller.run({
+            tabId: 10,
+            workflow,
+        });
+
+        assert.equal(result.success, false);
+        assert.match(result.error, /Permission denied/);
+        assert.equal(promptCalls, 1);
+        assert.equal(environment.calls.writeFile.length, 0);
     }
 );
 
