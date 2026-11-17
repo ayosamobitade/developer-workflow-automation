@@ -91,6 +91,20 @@ async function sendPromptToChatGPT(prompt, shouldSend = true, waitForResponse = 
     return response;
 }
 
+function createEmptySessionRecord(projectId) {
+    return {
+        projectId,
+        rootReadToken: null,
+        rootReadExpiresAt: null,
+        readToken: null,
+        readExpiresAt: null,
+        readDirectory: null,
+        writeToken: null,
+        writeExpiresAt: null,
+        writeDirectory: null,
+    };
+}
+
 function getAuthorizationStorage() {
     // Session storage survives sidebar unmounts/reopens but is cleared when
     // Firefox or the extension session ends. Keep bearer tokens out of
@@ -139,18 +153,6 @@ function App() {
         if (!token) return;
         await sendNativeRequest({ action: "revoke_session", token });
     }, []);
-
-    const createEmptySessionRecord = (projectId) => ({
-        projectId,
-        rootReadToken: null,
-        rootReadExpiresAt: null,
-        readToken: null,
-        readExpiresAt: null,
-        readDirectory: null,
-        writeToken: null,
-        writeExpiresAt: null,
-        writeDirectory: null,
-    });
 
     const persistSessionRecord = useCallback(async (tabId, record) => {
         const storage = getAuthorizationStorage();
