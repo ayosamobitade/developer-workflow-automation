@@ -190,21 +190,11 @@ function App() {
         }
 
         if (directory === "") {
-            const previousReadToken = record.readToken;
-            const previousWriteToken = record.writeToken;
-            record.readToken = record.rootReadToken;
-            record.readExpiresAt = record.rootReadExpiresAt;
-            record.readDirectory = "";
-            record.writeToken = null;
-            record.writeExpiresAt = null;
-            record.writeDirectory = null;
-
-            const tokens = [...new Set([
-                previousReadToken !== record.rootReadToken ? previousReadToken : null,
-                previousWriteToken,
-            ].filter(Boolean))];
-            await Promise.allSettled(tokens.map(revokeSession));
-            return record.readToken;
+            // Root access is an independent read capability. Do not replace
+            // the active working-directory read/write capabilities when a
+            // workspace refresh lists the project root. Background workflows
+            // may still be using those scoped tokens after a tab switch.
+            return record.rootReadToken;
         }
 
         if (
