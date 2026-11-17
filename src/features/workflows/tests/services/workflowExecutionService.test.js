@@ -835,7 +835,6 @@ test(
         const dependencyPath = "core/finance/payments/models/customer.py";
         const dependencyContent = "class Customer:\n    pass\n";
         const sentPrompts = [];
-        const writes = [];
         let call = 0;
 
         const dependencyRequest = [
@@ -893,11 +892,6 @@ test(
             },
         });
 
-        const originalWriteFile = environment.controller;
-        void originalWriteFile;
-
-        // Record writes and ensure the generated dependency is read back
-        // from the same in-memory project representation used by the workflow.
         const result = await environment.controller.run({
             tabId: 10,
             workflow,
