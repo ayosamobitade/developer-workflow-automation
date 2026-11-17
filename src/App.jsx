@@ -153,9 +153,10 @@ function App() {
     });
 
     const persistSessionRecord = useCallback(async (tabId, record) => {
-        if (!browser?.storage?.local || tabId === null || tabId === undefined) return;
+        const storage = getAuthorizationStorage();
+        if (!storage || tabId === null || tabId === undefined) return;
         const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
-        await browser.storage.local.set({ [key]: { ...record } });
+        await storage.set({ [key]: { ...record } });
     }, []);
 
     const loadSessionRecord = useCallback(async (tabId, projectId) => {
