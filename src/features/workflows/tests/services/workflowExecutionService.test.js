@@ -818,6 +818,113 @@ test(
 );
 
 test(
+    "generates a missing dependency, verifies the saved file, provides it, and resumes the exact original prompt",
+    async () => {
+        const workflow = createWorkflowInstance({
+            definition: MODEL_RECOVERY_WORKFLOW,
+            projectId: "test-project",
+            projectName: "Test Project",
+            modelPath: MODEL_PATH,
+            projectTree: "core/finance/payments/models/payment.py",
+        });
+        const dependencyPath = "core/finance/payments/models/customer.py";
+        const dependencyContent = "class Customer:\n    pass\n";
+        const sentPrompts = [];
+        const writes = [];
+        let call = 0;
+
+        const dependencyRequest = [
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_START>>>",
+            JSON.stringify({
+                path: dependencyPath,
+                reason: "The relationship requires the customer model.",
+                requiredFor: "Payment.customer",
+            }),
+            "<<<PROMPTFLOW_DEPENDENCY_REQUEST_END>>>",
+        ].join("\n");
+
+        const dependencyOutput = [
+            "<<<PROMPTFLOW_OUTPUT_START:model>>>",
+            "```python",
+            dependencyContent.trimEnd(),
+            "```",
+            "<<<PROMPTFLOW_OUTPUT_END:model>>>",
+        ].join("\n");
+
+        const originalOutput = [
+            "<<<PROMPTFLOW_OUTPUT_START:model>>>",
+            "```python",
+            MODEL_CONTENT.trimEnd(),
+            "```",
+            "<<<PROMPTFLOW_OUTPUT_END:model>>>",
+        ].join("\n");
+
+        const environment = createExecutionEnvironment({
+            workflow,
+            sendPrompt: async (prompt) => {
+                sentPrompts.push(prompt);
+                call += 1;
+
+                if (call === 1) return dependencyRequest;
+
+                if (call === 2) {
+                    assert.match(prompt, /DEPENDENCY SUBTASK SCOPE/);
+                    assert.match(prompt, new RegExp(dependencyPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+                    assert.match(prompt, /Only output ID: model/);
+                    assert.match(prompt, /Only destination path:/);
+                    return dependencyOutput;
+                }
+
+                if (call === 3) {
+                    assert.match(prompt, /PROMPTFLOW ADDITIONAL SOURCE FILE/);
+                    assert.match(prompt, /class Customer/);
+                    assert.doesNotMatch(prompt, /PROMPTFLOW WORKFLOW TASK/);
+                    return "Dependency context received.";
+                }
+
+                if (call === 4) return originalOutput;
+
+                throw new Error("Unexpected extra ChatGPT request.");
+            },
+        });
+
+        const originalWriteFile = environment.controller;
+        void originalWriteFile;
+
+        // Record writes and ensure the generated dependency is read back
+        // from the same in-memory project representation used by the workflow.
+        const result = await environment.controller.run({
+            tabId: 10,
+            workflow,
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(call, 4);
+        assert.equal(sentPrompts[0], sentPrompts[3]);
+        assert.match(sentPrompts[1], /DEPENDENCY SUBTASK SCOPE/);
+        assert.match(sentPrompts[2], /class Customer/);
+        assert.equal(environment.files.get(MODEL_PATH), MODEL_CONTENT.trimEnd());
+        assert.equal(
+            environment.files.get(dependencyPath),
+            dependencyContent.trimEnd()
+        );
+        assert.equal(
+            environment.calls.writeFile.filter((item) => item.path === dependencyPath).length,
+            1
+        );
+        assert.equal(
+            workflow.input.dependencyResolution.status,
+            "source_ready"
+        );
+        assert.equal(
+            workflow.input.dependencyResolution.dependencies[0].path,
+            dependencyPath
+        );
+    }
+);
+
+
+test(
     "provides an existing dependency separately and resends the exact original prompt",
     async () => {
         const workflow = createWorkflowInstance({
