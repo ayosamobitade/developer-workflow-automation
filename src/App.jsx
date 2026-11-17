@@ -5,6 +5,7 @@ import { generateFileTree } from "./features/file-tree/treeGenerator";
 
 const NATIVE_MESSAGE_TYPE = "PROMPTFLOW_NATIVE";
 const WORKSPACE_STORAGE_PREFIX = "promptflow_workspace_";
+const AUTHORIZATION_STORAGE_PREFIX = "promptflow_authorization_";
 const SESSION_RENEWAL_BUFFER_SECONDS = 60;
 
 async function sendNativeRequest(request) {
@@ -130,6 +131,81 @@ function App() {
         await sendNativeRequest({ action: "revoke_session", token });
     }, []);
 
+    const createEmptySessionRecord = (projectId) => ({
+        projectId,
+        rootReadToken: null,
+        rootReadExpiresAt: null,
+        readToken: null,
+        readExpiresAt: null,
+        readDirectory: null,
+        writeToken: null,
+        writeExpiresAt: null,
+        writeDirectory: null,
+    });
+
+    const persistSessionRecord = useCallback(async (tabId, record) => {
+        if (!browser?.storage?.local || tabId === null || tabId === undefined) return;
+        const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
+        await browser.storage.local.set({ [key]: { ...record } });
+    }, []);
+
+    const loadSessionRecord = useCallback(async (tabId, projectId) => {
+        if (tabId === null || tabId === undefined) {
+            throw new Error("An active browser tab is required.");
+        }
+
+        const inMemory = sessionsRef.current.get(tabId);
+        if (inMemory?.projectId === projectId) return inMemory;
+
+        const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
+        let stored = null;
+        if (browser?.storage?.local) {
+            const result = await browser.storage.local.get(key);
+            stored = result[key] || null;
+        }
+
+        if (stored?.projectId === projectId) {
+            const record = {
+                ...createEmptySessionRecord(projectId),
+                ...stored,
+            };
+
+            if (!isSessionValid(record.rootReadToken, record.rootReadExpiresAt)) {
+                record.rootReadToken = null;
+                record.rootReadExpiresAt = null;
+            }
+            if (!isSessionValid(record.readToken, record.readExpiresAt)) {
+                record.readToken = null;
+                record.readExpiresAt = null;
+                record.readDirectory = null;
+            }
+            if (!isSessionValid(record.writeToken, record.writeExpiresAt)) {
+                record.writeToken = null;
+                record.writeExpiresAt = null;
+                record.writeDirectory = null;
+            }
+
+            sessionsRef.current.set(tabId, record);
+            await persistSessionRecord(tabId, record);
+            return record;
+        }
+
+        if (stored && stored.projectId !== projectId) {
+            const oldTokens = [
+                stored.rootReadToken,
+                stored.readToken,
+                stored.writeToken,
+            ].filter(Boolean);
+            await Promise.allSettled(oldTokens.map(revokeSession));
+            await browser?.storage?.local?.remove(key);
+        }
+
+        const record = createEmptySessionRecord(projectId);
+        sessionsRef.current.set(tabId, record);
+        await persistSessionRecord(tabId, record);
+        return record;
+    }, [persistSessionRecord, revokeSession]);
+
     const getSessionRecord = useCallback((tabId, projectId) => {
         if (tabId === null || tabId === undefined) {
             throw new Error("An active browser tab is required.");
@@ -137,26 +213,25 @@ function App() {
 
         let record = sessionsRef.current.get(tabId);
         if (!record || record.projectId !== projectId) {
-            record = {
-                projectId,
-                rootReadToken: null,
-                rootReadExpiresAt: null,
-                readToken: null,
-                readExpiresAt: null,
-                readDirectory: null,
-                writeToken: null,
-                writeExpiresAt: null,
-                writeDirectory: null,
-            };
+            record = createEmptySessionRecord(projectId);
             sessionsRef.current.set(tabId, record);
         }
         return record;
     }, []);
 
     const revokeTabSessions = useCallback(async (tabId) => {
-        const record = sessionsRef.current.get(tabId);
-        if (!record) return;
+        let record = sessionsRef.current.get(tabId);
+        const key = `${AUTHORIZATION_STORAGE_PREFIX}${tabId}`;
+
+        if (!record && browser?.storage?.local) {
+            const stored = await browser.storage.local.get(key);
+            record = stored[key] || null;
+        }
+
         sessionsRef.current.delete(tabId);
+        await browser?.storage?.local?.remove(key);
+
+        if (!record) return;
         const tokens = [...new Set([
             record.rootReadToken,
             record.readToken,
@@ -168,18 +243,18 @@ function App() {
     const ensureReadSession = useCallback(async (projectId, directory = "", tabId) => {
         if (!projectId) throw new Error("A registered project is required.");
 
-        let record = sessionsRef.current.get(tabId);
-        if (record && record.projectId !== projectId) {
+        const existingRecord = sessionsRef.current.get(tabId);
+        if (existingRecord && existingRecord.projectId !== projectId) {
             await revokeTabSessions(tabId);
-            record = null;
         }
-        record = getSessionRecord(tabId, projectId);
+        const record = await loadSessionRecord(tabId, projectId);
 
         if (!isSessionValid(record.rootReadToken, record.rootReadExpiresAt)) {
             const previousRootToken = record.rootReadToken;
             const rootSession = await createSession(projectId, "", "read");
             record.rootReadToken = rootSession.token;
             record.rootReadExpiresAt = rootSession.expires_at;
+            await persistSessionRecord(tabId, record);
 
             if (record.readToken === previousRootToken) {
                 record.readToken = null;
@@ -213,6 +288,7 @@ function App() {
         record.writeToken = null;
         record.writeExpiresAt = null;
         record.writeDirectory = null;
+        await persistSessionRecord(tabId, record);
 
         const tokens = [...new Set([
             previousReadToken !== record.rootReadToken ? previousReadToken : null,
@@ -220,7 +296,7 @@ function App() {
         ].filter(Boolean))];
         await Promise.allSettled(tokens.map(revokeSession));
         return record.readToken;
-    }, [createSession, getSessionRecord, revokeSession, revokeTabSessions]);
+    }, [createSession, loadSessionRecord, persistSessionRecord, revokeSession, revokeTabSessions]);
 
     const ensureWriteSession = useCallback(async (projectId, directory = nativeWorkingDirectory, tabId = activeTabId) => {
         await ensureReadSession(projectId, directory, tabId);
@@ -238,6 +314,7 @@ function App() {
             record.writeToken = null;
             record.writeExpiresAt = null;
             record.writeDirectory = null;
+            await persistSessionRecord(tabId, record);
         }
 
         const confirmed = window.confirm([
@@ -259,8 +336,9 @@ function App() {
         record.writeToken = response.token;
         record.writeExpiresAt = response.expires_at;
         record.writeDirectory = directory;
+        await persistSessionRecord(tabId, record);
         return record.writeToken;
-    }, [activeTabId, createSession, ensureReadSession, getSessionRecord, nativeProjectName, nativeWorkingDirectory, revokeSession]);
+    }, [activeTabId, createSession, ensureReadSession, getSessionRecord, nativeProjectName, nativeWorkingDirectory, persistSessionRecord, revokeSession]);
 
     const getProjectFiles = useCallback(async (projectId, directory = nativeWorkingDirectory) => {
         const token = await ensureReadSession(projectId, directory, activeTabId);
