@@ -456,15 +456,9 @@ function App() {
 
             if (!isCurrentRestore()) return;
 
-            // Preserve the selected project and its saved workspace on
-            // transient host/filesystem errors. Only an explicit auth
-            // rejection should require the user to authorize again.
-            if (authorizationRejected) {
-                setNativeProjectId("");
-                setNativeProjectName("");
-                setNativeWorkingDirectory("");
-            }
-
+            // Preserve the selected project and its saved workspace even
+            // when a capability is rejected. The next operation can obtain a
+            // fresh read session; write access still requires explicit approval.
             setNativeConnected(false);
             setNativeProjectFiles([]);
             setNativeProjectDirectories([]);
