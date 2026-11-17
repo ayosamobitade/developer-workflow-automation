@@ -992,7 +992,7 @@ function hasCompleteDependencyRequest(responseText) {
         return false;
     }
 
-    const path = request.path.trim().replace(/\\\\/g, "/");
+    const path = request.path.trim().replace(/\\/g, "/");
     const segments = path.split("/");
 
     return Boolean(
