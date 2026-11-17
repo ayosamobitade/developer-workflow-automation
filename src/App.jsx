@@ -445,18 +445,27 @@ function App() {
         } catch (restoreError) {
             if (!isCurrentRestore()) return;
 
-            // Only clear stored capabilities when the native host explicitly
-            // rejects authorization. Filesystem/native-host connectivity
-            // failures must not revoke otherwise-valid sessions.
-            if (/authorization session is invalid|has been revoked|has expired|belongs to another|permission is not granted/i.test(restoreError.message || "")) {
+            const authorizationRejected =
+                /authorization session is invalid|has been revoked|has expired|belongs to another|permission is not granted/i.test(
+                    restoreError.message || ""
+                );
+
+            if (authorizationRejected) {
                 await revokeTabSessions(tabId);
             }
 
             if (!isCurrentRestore()) return;
 
-            setNativeProjectId("");
-            setNativeProjectName("");
-            setNativeWorkingDirectory("");
+            // Preserve the selected project and its saved workspace on
+            // transient host/filesystem errors. Only an explicit auth
+            // rejection should require the user to authorize again.
+            if (authorizationRejected) {
+                setNativeProjectId("");
+                setNativeProjectName("");
+                setNativeWorkingDirectory("");
+            }
+
+            setNativeConnected(false);
             setNativeProjectFiles([]);
             setNativeProjectDirectories([]);
             setNativeError(restoreError.message || "Unable to restore the registered project.");
